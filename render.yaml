@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: signalscope-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false          # You set this in Render dashboard — never in this file
+      - key: ALLOWED_ORIGINS
+        value: "https://yelnats.netlify.app"   # Update to your actual Netlify URL
