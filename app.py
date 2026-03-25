@@ -153,7 +153,7 @@ def fetch_additional_pages(base_url):
                 import re
                 text = re.sub(r'<[^>]+>', ' ', res.text)
                 text = re.sub(r'\s+', ' ', text).strip()
-                results.append(f"[{path}]\n{text[:2500]}")
+                results.append(f"[{path}]\n{text[:1000]}")
                 logger.info(f"Enriched with {path} ({len(text)} chars)")
         except Exception as e:
             logger.debug(f"Enrichment skip {path}: {e}")
@@ -177,7 +177,7 @@ def analyze():
 
     body = request.get_json(force=True)
     prompt = body.get("prompt")
-    max_tokens = body.get("max_tokens", 1800)
+    max_tokens = body.get("max_tokens", 2500)
     website = body.get("website", "")
     mode = body.get("mode", "social")
 
@@ -190,7 +190,7 @@ def analyze():
         try:
             if not website.startswith("http"):
                 website = "https://" + website
-            extra_pages = fetch_additional_pages(website)
+            extra_pages = fetch_additional_pages(website)[:3]  # cap at 3 pages
             if extra_pages:
                 enriched_context = "\n\n--- ADDITIONAL PAGES (about, blog, products) ---\n" + "\n\n".join(extra_pages)
                 logger.info(f"Enriched with {len(extra_pages)} additional pages")
