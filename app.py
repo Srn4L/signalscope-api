@@ -140,6 +140,34 @@ def health():
     return jsonify({"status": "ok", "service": "uper-api", "version": "2.0"})
 
 
+def fetch_additional_pages(base_url):
+    """Fetch about, blog, and product pages to enrich the analysis context."""
+    paths = ["/about", "/pages/about", "/about-us", "/blog", "/products", "/our-story"]
+    results = []
+    for path in paths:
+        try:
+            url = base_url.rstrip("/") + path
+            res = requests.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+            if res.status_code == 200 and len(res.text) > 500:
+                # Strip basic HTML tags for token efficiency
+                import re
+                text = re.sub(r'<[^>]+>', ' ', res.text)
+                text = re.sub(r'\s+', ' ', text).strip()
+                results.append(f"[{path}]\n{text[:2500]}")
+                logger.info(f"Enriched with {path} ({len(text)} chars)")
+        except Exception as e:
+            logger.debug(f"Enrichment skip {path}: {e}")
+    return results
+
+
+MODE_INSTRUCTIONS = {
+    "growth":     "Focus on acquisition opportunities, funnel efficiency, audience expansion, and growth levers. Identify what's driving or limiting top-of-funnel reach.",
+    "content":    "Focus on content quality, consistency, storytelling, format diversity, and editorial voice. Identify content gaps and what types of content are missing.",
+    "social":     "Focus on social media presence, platform-specific performance, engagement patterns, community signals, and posting strategy across channels.",
+    "conversion": "Focus on UX signals, call-to-action clarity, messaging effectiveness, trust signals, and conversion optimization opportunities on the website.",
+}
+
+
 # ── Main analysis endpoint ────────────────────────────────────────────────────
 @app.route("/analyze", methods=["POST"])
 @rate_limit(max_per_minute=10)
@@ -149,26 +177,47 @@ def analyze():
 
     body = request.get_json(force=True)
     prompt = body.get("prompt")
-    max_tokens = body.get("max_tokens", 1800)  # Increased for score_reasoning field
+    max_tokens = body.get("max_tokens", 1800)
+    website = body.get("website", "")
+    mode = body.get("mode", "social")
 
     if not prompt:
         return jsonify({"error": "Missing prompt."}), 400
 
-    logger.info(f"Analysis request — prompt length: {len(prompt)} chars")
+    # Multi-source enrichment — fetch additional pages and inject into prompt
+    enriched_context = ""
+    if website:
+        try:
+            if not website.startswith("http"):
+                website = "https://" + website
+            extra_pages = fetch_additional_pages(website)
+            if extra_pages:
+                enriched_context = "\n\n--- ADDITIONAL PAGES (about, blog, products) ---\n" + "\n\n".join(extra_pages)
+                logger.info(f"Enriched with {len(extra_pages)} additional pages")
+        except Exception as e:
+            logger.warning(f"Enrichment failed: {e}")
+
+    # Inject enriched context and mode instruction into prompt
+    mode_instruction = MODE_INSTRUCTIONS.get(mode, MODE_INSTRUCTIONS["social"])
+    if enriched_context:
+        prompt = prompt + enriched_context
+    mode_prefix = f"ANALYSIS MODE: {mode.upper()}\n{mode_instruction}\n\n"
+    prompt = mode_prefix + prompt
+
+    logger.info(f"Analysis request — mode: {mode}, prompt length: {len(prompt)} chars")
 
     try:
         data = call_openai(prompt, max_tokens)
 
-        # Attach human-in-the-loop disclaimer to every response
         data["_disclaimer"] = (
             "This analysis provides AI-generated marketing insights based on publicly "
             "visible content signals. Scores are estimates, not platform-verified metrics. "
             "Final strategic decisions should be made by marketing professionals."
         )
+        data["_mode"] = mode
 
         logger.info(f"Analysis complete — company: {data.get('company', 'unknown')}, score: {data.get('overall_score', 'n/a')}")
 
-        # Return in OpenAI-compatible wrapper so frontend callAI() still works
         return jsonify({
             "choices": [{
                 "message": {
