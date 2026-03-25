@@ -3,7 +3,12 @@ services:
     name: signalscope-api
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+   startCommand: gunicorn app:app --timeout 120
+```
+
+**In Render Settings** — go to signalscope-api → Settings → scroll to **Start Command** → change to:
+```
+gunicorn app:app --timeout 120
 
     envVars:
       - key: OPENAI_API_KEY
