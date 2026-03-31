@@ -1,10 +1,12 @@
 import os
 import json
+import re
 import time
 import logging
 from functools import wraps
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from bs4 import BeautifulSoup
 import requests
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -260,6 +262,270 @@ def disclaimer():
         ),
         "data_sources": "Public web content only. No OAuth, no private account data.",
         "ai_model": "OpenAI GPT-4o mini",
+    })
+
+
+
+# ── Competitor Intelligence endpoint ─────────────────────────────────────────
+@app.route("/competitors", methods=["POST"])
+@rate_limit(max_per_minute=10)
+def competitors():
+    if not OPENAI_API_KEY:
+        return jsonify({"error": "Server not configured with API key."}), 500
+
+    body = request.get_json(force=True)
+    competitor_urls = body.get("competitors", [])
+    client_name     = body.get("client_name", "Client")
+    uper_analysis   = body.get("uper_analysis")  # optional — passed from frontend
+    mode_param      = body.get("mode", "social")
+
+    if not competitor_urls:
+        return jsonify({"error": "No competitor URLs provided."}), 400
+
+    logger.info(f"Competitor analysis — client: {client_name}, urls: {len(competitor_urls)}, has_uper: {bool(uper_analysis)}")
+
+    # ── Scrape each competitor ────────────────────────────────────────────────
+    PROMO_KEYWORDS = [
+        "free consultation","discount","off","sale","limited time","special offer",
+        "starting at","flat fee","new client","first visit","membership","package",
+        "bundle","complimentary","refer a friend","introductory"
+    ]
+    SERVICE_KEYWORDS = [
+        "tax preparation","tax filing","bookkeeping","accounting","payroll","cpa",
+        "botox","filler","laser","facial","hydrafacial","microneedling","coolsculpting",
+        "iv therapy","weight loss","semaglutide","massage","acupuncture","prp",
+        "seo","social media","marketing","branding","web design","analytics",
+        "consulting","strategy","email marketing","paid ads","content"
+    ]
+
+    def scrape_competitor(url):
+        try:
+            resp = requests.get(url, timeout=10, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            })
+            soup = BeautifulSoup(resp.text, "html.parser") if resp.ok else None
+            if not soup:
+                return {"url": url, "error": "Could not fetch page"}
+
+            # Strip noise
+            for tag in soup(["script","style","nav","footer","head"]):
+                tag.decompose()
+            text = re.sub(r'\s+', ' ', soup.get_text(separator=" ")).strip().lower()
+
+            # Prices
+            prices_raw = re.findall(r'\$[\d,]+(?:\.\d{2})?', text)
+            prices = []
+            for p in prices_raw:
+                try:
+                    v = float(p.replace("$","").replace(",",""))
+                    if 10 <= v <= 10000:
+                        prices.append(p)
+                except:
+                    pass
+            prices = list(dict.fromkeys(prices))[:12]
+
+            title     = soup.find("title")
+            headlines = [h.get_text().strip() for h in soup.find_all(["h1","h2"])[:6] if len(h.get_text().strip()) > 5]
+            promos    = [kw for kw in PROMO_KEYWORDS if kw in text]
+            services  = [kw for kw in SERVICE_KEYWORDS if kw in text]
+
+            # Insight score
+            price_vals = []
+            for p in prices:
+                try: price_vals.append(float(p.replace("$","").replace(",","")))
+                except: pass
+
+            if price_vals:
+                avg = sum(price_vals) / len(price_vals)
+                pricing_agg = "High" if avg < 100 else ("Medium" if avg < 300 else "Low")
+                price_range = f"${min(price_vals):.0f}–${max(price_vals):.0f} (avg ${avg:.0f})"
+            else:
+                pricing_agg = "Unknown"
+                price_range = "Not detected"
+
+            def band(val, lo, hi):
+                return "High" if val >= hi else ("Low" if val <= lo else "Medium")
+
+            sm = {"High":3,"Medium":2,"Low":1,"Unknown":1}
+            threat = round((sm[pricing_agg] + sm[band(len(promos),1,4)] + sm[band(len(services),2,6)]) / 9 * 100)
+
+            # Also try /pricing or /services subpage
+            extra_prices, extra_services = [], []
+            for path in ["/services", "/pricing", "/treatments"]:
+                try:
+                    r2 = requests.get(url.rstrip("/") + path, timeout=6, headers={"User-Agent": "Mozilla/5.0"})
+                    if r2.ok and len(r2.text) > 500:
+                        s2 = BeautifulSoup(r2.text, "html.parser")
+                        for t in s2(["script","style","nav","footer"]): t.decompose()
+                        t2 = s2.get_text(separator=" ").lower()
+                        ep = [p for p in re.findall(r'\$[\d,]+(?:\.\d{2})?', t2)
+                              if 10 <= float(p.replace("$","").replace(",","")) <= 10000]
+                        extra_prices += ep[:6]
+                        extra_services += [kw for kw in SERVICE_KEYWORDS if kw in t2]
+                except:
+                    pass
+
+            all_prices   = list(dict.fromkeys(prices + extra_prices))[:15]
+            all_services = list(set(services + extra_services))
+
+            return {
+                "url": url,
+                "title": title.get_text().strip() if title else url,
+                "headlines": headlines,
+                "prices_found": all_prices,
+                "promotions_detected": promos,
+                "services_detected": all_services,
+                "insight_score": {
+                    "threat_score": threat,
+                    "pricing_aggressiveness": pricing_agg,
+                    "promo_intensity": band(len(promos),1,4),
+                    "service_breadth": band(len(all_services),2,6),
+                    "price_range": price_range
+                }
+            }
+        except Exception as e:
+            logger.warning(f"Scrape failed for {url}: {e}")
+            return {"url": url, "error": str(e)}
+
+    competitor_data = []
+    for url in competitor_urls[:5]:  # cap at 5
+        data = scrape_competitor(url)
+        competitor_data.append(data)
+
+    # ── Build GPT prompt ──────────────────────────────────────────────────────
+    comp_blocks = []
+    for i, c in enumerate(competitor_data, 1):
+        if "error" in c:
+            comp_blocks.append(f"Competitor {i}: {c['url']} — Could not scrape")
+            continue
+        sc = c.get("insight_score", {})
+        comp_blocks.append(f"""Competitor {i}: {c.get('title', c['url'])}
+URL: {c['url']}
+Headlines: {' | '.join(c['headlines'][:4]) or 'N/A'}
+Prices: {', '.join(c['prices_found']) or 'None detected'}
+Promotions: {', '.join(c['promotions_detected']) or 'None'}
+Services: {', '.join(c['services_detected']) or 'None'}
+Threat Score: {sc.get('threat_score','?')}/100 | Pricing: {sc.get('pricing_aggressiveness','?')} | Promos: {sc.get('promo_intensity','?')} | Services: {sc.get('service_breadth','?')}
+Price Range: {sc.get('price_range','N/A')}""")
+
+    comp_text = "\n---\n".join(comp_blocks)
+
+    if uper_analysis:
+        # Full mode — has Uper brand analysis to compare against
+        system_prompt = """You are a senior growth strategist who specializes in market positioning.
+You have access to both a brand's own external signal analysis (from Uper) and competitor intelligence.
+Your job: identify exactly where the brand stands relative to its market, and recommend specific moves.
+Be direct, specific, and actionable. No generic advice."""
+
+        user_prompt = f"""Client: {client_name}
+
+YOUR BRAND ANALYSIS (from Uper):
+{uper_analysis}
+
+COMPETITOR INTELLIGENCE:
+{comp_text}
+
+Output in EXACTLY this format:
+
+## Executive Summary
+2-3 sentences. Where does {client_name} stand vs the market right now? What is the single most important takeaway?
+
+## Your Position vs Market
+- How your brand signals compare to competitors on voice, consistency, engagement, and coverage
+- Where you are stronger and where competitors have the edge
+
+## Competitor Snapshot
+For each competitor:
+**[Name]** — Threat: X/100
+- Pricing: [range and tactic]
+- Promotions: [what they're running]
+- Positioning: [their angle in one line]
+
+## Key Gaps
+- Specific gaps between your brand and the market that represent risk or opportunity
+
+## Opportunities
+- 3-4 concrete moves {client_name} can make to improve market position
+
+## Recommended Actions
+1. [Most urgent — within 7 days]
+2. [Second priority]
+3. [Third priority]
+4. [Fourth priority]
+
+## Threat Summary
+High: [competitors and why]
+Medium: [competitors and why]
+Low: [competitors and why]"""
+
+    else:
+        # Standalone mode — competitor intelligence only
+        system_prompt = """You are a senior market intelligence analyst.
+Analyze competitor data and produce a clear, actionable competitive intelligence report.
+Be specific and direct. No generic advice. Focus on what the client should do next."""
+
+        user_prompt = f"""Client: {client_name}
+
+COMPETITOR INTELLIGENCE:
+{comp_text}
+
+Output in EXACTLY this format:
+
+## Market Overview
+2-3 sentences on the competitive landscape.
+
+## Competitor Snapshot
+For each competitor:
+**[Name]** — Threat: X/100
+- Pricing: [range and tactic]
+- Promotions: [what they're running]
+- Positioning: [their angle in one line]
+
+## Key Patterns
+- 3-4 observations about pricing, promotions, and positioning trends
+
+## Opportunities
+- 3-4 specific gaps {client_name} could act on
+
+## Recommended Actions
+1. [Most urgent]
+2. [Second]
+3. [Third]
+4. [Fourth]
+
+## Threat Summary
+High: [competitors and why]
+Medium: [competitors and why]
+Low: [competitors and why]"""
+
+    # Direct OpenAI call — competitor report returns markdown, not JSON
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt}
+                ],
+                "max_tokens": 1600,
+                "temperature": 0.4
+            },
+            timeout=90
+        )
+        resp.raise_for_status()
+        report_text = resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        logger.error(f"Competitor GPT call failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+    logger.info(f"Competitor analysis complete — {len(competitor_data)} competitors analyzed")
+    return jsonify({
+        "mode": "full_positioning" if uper_analysis else "competitor_only",
+        "client": client_name,
+        "competitor_data": competitor_data,
+        "report": report_text
     })
 
 
