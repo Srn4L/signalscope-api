@@ -579,38 +579,57 @@ def agent():
     industry      = body.get('industry', '')
     user_content  = body.get('user_content', '')  # pasted captions OR profile URL
 
-    # Optional manual social hints
+    # Optional manual social hints — now includes facebook
     manual_socials = {
-        k: body.get(k) for k in ['instagram','tiktok','twitter','linkedin']
+        k: body.get(k) for k in ['instagram','tiktok','facebook','twitter','linkedin']
         if body.get(k)
     }
 
-    if not business_name or not website_url:
-        return jsonify({"error": "business_name and website are required"}), 400
+    if not business_name:
+        return jsonify({"error": "business_name is required"}), 400
+    if not website_url and not manual_socials:
+        return jsonify({"error": "Provide at least a website URL or one social profile"}), 400
 
     # ── Scrape ────────────────────────────────────────────────────────────────
     website_pages = {}
     homepage_html = ""
     social_links  = manual_socials.copy()
 
-    if not website_url.startswith("http"):
-        website_url = "https://" + website_url
+    # Website scraping — only if URL provided
+    if website_url:
+        if not website_url.startswith("http"):
+            website_url = "https://" + website_url
 
-    html, _ = safe_get(website_url)
-    if html:
-        website_pages["homepage"] = extract_text(html, 3000)
-        homepage_html = html
-        # Auto-detect social links via <a href>
-        detected = find_social_links(html)
-        for k, v in detected.items():
-            if k not in social_links:
-                social_links[k] = v
+        html, _ = safe_get(website_url)
+        if html:
+            website_pages["homepage"] = extract_text(html, 3000)
+            homepage_html = html
+            detected = find_social_links(html)
+            for k, v in detected.items():
+                if k not in social_links:
+                    social_links[k] = v
 
-    for slug in ["/about", "/about-us", "/services", "/pricing", "/contact"]:
-        h, code = safe_get(website_url.rstrip("/") + slug)
-        if h and isinstance(code, int) and code < 400:
-            text = extract_text(h, 1500)
-            if text: website_pages[slug.lstrip("/")] = text
+        for slug in ["/about", "/about-us", "/services", "/pricing", "/contact"]:
+            h, code = safe_get(website_url.rstrip("/") + slug)
+            if h and isinstance(code, int) and code < 400:
+                text = extract_text(h, 1500)
+                if text: website_pages[slug.lstrip("/")] = text
+    else:
+        # No website — search for one automatically
+        print(f"  → No website provided, searching for {business_name}...")
+        results = search_web(f'"{business_name}" {location} official website', 3)
+        for r in results:
+            u = r.get("url", "")
+            skip = ["yelp","google","facebook","instagram","tiktok","twitter","linkedin","bing"]
+            if u and not any(s in u for s in skip):
+                html, _ = safe_get(u)
+                if html:
+                    website_pages["homepage"] = extract_text(html, 3000)
+                    detected = find_social_links(html)
+                    for k, v in detected.items():
+                        if k not in social_links:
+                            social_links[k] = v
+                break
 
     # ── Social signals — 3-layer approach ───────────────────────────────────
     social_text = {}
