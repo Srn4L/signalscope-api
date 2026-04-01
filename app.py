@@ -19,6 +19,7 @@ import json
 import time
 import textwrap
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -1057,7 +1058,7 @@ def agent():
 
     # ── Press & web mentions for thin sites ──────────────────────────────────
     # Finds news articles, interviews, features — useful when website is minimal
-    press_results = search_web(f'"{business_name}" {location}', 5)
+    press_results = search_web(f'"{business_name}" {location}', 3)
     press_snippets = []
     SKIP_PRESS = ["yelp.com", "yellowpages.com", "mapquest.com", "bbb.org", "facebook.com"]
     for r in press_results:
@@ -1070,9 +1071,9 @@ def agent():
 
     # Reviews
     q = f'"{business_name}" {location} reviews'
-    review_snippets = search_web(q, 5)
+    review_snippets = search_web(q, 3)
     review_texts = [f"[{r['title']}]: {r['body']}" for r in review_snippets if r.get('body')]
-    yelp_results = search_web(f"{business_name} {location} yelp", 3)
+    yelp_results = search_web(f"{business_name} {location} yelp", 2)
     for r in yelp_results:
         if "yelp.com/biz/" in r.get("url",""):
             h, _ = safe_get(r["url"])
@@ -1087,15 +1088,28 @@ def agent():
     prices = re.findall(r"\$[\d,]+(?:\.\d{2})?", website_flat)
     if prices: pricing_text += "\n[Website prices]: " + ", ".join(set(prices[:12]))
 
-    # ── Trend Intelligence ────────────────────────────────────────────────────
-    trend_data = fetch_trend_intelligence(business_name, industry, location, website_pages)
+    # ── Trend + Booking — run in parallel to save time ──────────────────────
+    trend_data   = None
+    booking_cards = []
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_trends  = executor.submit(fetch_trend_intelligence, business_name, industry, location, website_pages)
+            future_booking = executor.submit(scrape_booking_competitors, business_name, industry, location, 4)
+            try:
+                trend_data = future_trends.result(timeout=25)
+            except Exception:
+                trend_data = None
+            try:
+                booking_cards = future_booking.result(timeout=25)
+            except Exception:
+                booking_cards = []
+    except Exception:
+        pass
+
     trend_text = format_trend_intelligence(trend_data)
     if trend_text:
         pricing_text += "\n\n" + trend_text
 
-    # ── Competitor Discovery — Booking Platforms + Web Search ────────────────
-    # Booking platforms first — real pricing, ratings, services for local businesses
-    booking_cards = scrape_booking_competitors(business_name, industry, location, limit=5)
     booking_intel = format_booking_intelligence(booking_cards)
     if booking_intel:
         pricing_text += "\n\n" + booking_intel
