@@ -3,7 +3,7 @@ services:
     name: signalscope-api
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --timeout 120
+  startCommand: gunicorn app:app --timeout 180 --graceful-timeout 30
     envVars:
       - key: OPENAI_API_KEY
         sync: false
