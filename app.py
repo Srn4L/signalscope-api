@@ -77,11 +77,18 @@ MASTER_CODE  = _master
 GUEST_CODES  = {c.strip().lower() for c in _guests.split(",") if c.strip()}
 ALL_CODES    = GUEST_CODES | {MASTER_CODE}
 
+# Guest session expiry — how long a guest code stays valid after first use
+GUEST_SESSION_HOURS = int(os.environ.get("GUEST_SESSION_HOURS", "4"))
+
+# Tracks when each guest code was first validated: code → timestamp
+# Resets on Render restart (which is fine — forces re-entry)
+GUEST_SESSIONS = {}  # code → first_validated_timestamp
+
 
 def get_code_type(req) -> str | None:
     """
     Read token ONLY from X-Agent-Token header.
-    Returns "master", "guest", or None if invalid/missing.
+    Returns "master", "guest", or None if invalid/missing/expired.
     """
     token = req.headers.get("X-Agent-Token", "").strip().lower()
     if not token:
@@ -89,6 +96,17 @@ def get_code_type(req) -> str | None:
     if token == MASTER_CODE:
         return "master"
     if token in GUEST_CODES:
+        # Check if guest session has expired
+        now = time.time()
+        first_used = GUEST_SESSIONS.get(token)
+        if first_used is None:
+            # First time using this code — start the clock
+            GUEST_SESSIONS[token] = now
+            return "guest"
+        if now - first_used > GUEST_SESSION_HOURS * 3600:
+            # Session expired — remove so they need a fresh code from you
+            del GUEST_SESSIONS[token]
+            return None
         return "guest"
     return None
 
@@ -549,7 +567,12 @@ def agent():
     if not gpt_client or not claude_client:
         return jsonify({"error": "API keys not configured on backend"}), 500
 
-    body = request.get_json()
+    body = request.get_json(force=True, silent=True) or {}
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except Exception:
+            body = {}
     business_name = body.get('business_name', '')
     website_url   = body.get('website', '')
     location      = body.get('location', '')
