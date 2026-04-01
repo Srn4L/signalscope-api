@@ -17,7 +17,9 @@ import os
 import re
 import json
 import time
+import uuid
 import textwrap
+from threading import Thread
 from collections import defaultdict
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -52,6 +54,11 @@ def get_cached(key):
 def set_cache(key, data):
     """Store response in cache."""
     CACHE[key] = (data, time.time())
+
+# ─── BACKGROUND JOBS ──────────────────────────────────────────────────────────
+# Stores deep pipeline results keyed by job_id
+# Resets on restart — fine for now
+JOBS = {}  # job_id → {"status": "running|done|error", "result": ..., "error": ...}
 
 RATE_LIMIT_AGENT = 10  # requests per hour per user (master is exempt)
 
@@ -630,6 +637,112 @@ def build_data_quality(website_pages, social_text, review_text, competitors):
         "competitors": {"pct": comp_pct, "level": comp_level, "detail": f"{len(competitors)} found"},
     }
 
+def run_fast_pipeline(business_name, location, website_pages, social_text):
+    """
+    Fast GPT-only pass using just homepage + social signals.
+    Returns a basic report in 3-8 seconds.
+    Used as the immediate response while deep analysis runs in background.
+    """
+    import textwrap
+    raw = {
+        "website_pages": {k: v[:1500] for k, v in list(website_pages.items())[:2]},
+        "social_text":   {k: v[:1000] for k, v in list(social_text.items())[:2]},
+    }
+    prompt = textwrap.dedent(f"""
+    You are a marketing analyst. Generate a quick SignalScope report for {business_name} ({location}).
+    Use only the data provided. Be honest when signals are thin.
+
+    DATA: {json.dumps(raw)[:3000]}
+
+    Return ONLY valid JSON:
+    {{
+      "company": "{business_name}",
+      "industry": "string",
+      "overall_score": 0,
+      "key_insight": "string",
+      "scores": {{
+        "content_consistency": {{"score": 0, "confidence": "low"}},
+        "engagement_quality":  {{"score": 0, "confidence": "low"}},
+        "content_diversity":   {{"score": 0, "confidence": "low"}},
+        "brand_voice_clarity": {{"score": 0, "confidence": "low"}},
+        "platform_coverage":   {{"score": 0, "confidence": "low"}}
+      }},
+      "score_reasoning": {{"content_consistency":"","engagement_quality":"","content_diversity":"","brand_voice_clarity":"","platform_coverage":""}},
+      "score_evidence":  {{"content_consistency":"","engagement_quality":"","content_diversity":"","brand_voice_clarity":"","platform_coverage":""}},
+      "signal_map_data": {{"platforms_present":[],"platforms_absent":[],"content_types":[],"tone_signals":[],"video_presence":false,"ugc_signals":false,"posting_frequency":"unknown"}},
+      "overview": "string",
+      "strengths": ["","",""],
+      "weaknesses": ["","",""],
+      "content_patterns": {{"themes":[],"caption_structure":""}},
+      "social_strategy": "string",
+      "experiments": [
+        {{"experiment":"","signal":"","hypothesis":"","metric":"","timeframe":"14 days","success_threshold":"","affects":"","impact":5,"effort":5,"confidence":4}},
+        {{"experiment":"","signal":"","hypothesis":"","metric":"","timeframe":"21 days","success_threshold":"","affects":"","impact":5,"effort":5,"confidence":4}},
+        {{"experiment":"","signal":"","hypothesis":"","metric":"","timeframe":"14 days","success_threshold":"","affects":"","impact":5,"effort":5,"confidence":4}},
+        {{"experiment":"","signal":"","hypothesis":"","metric":"","timeframe":"30 days","success_threshold":"","affects":"","impact":5,"effort":5,"confidence":4}}
+      ],
+      "strategy_blueprint": {{"pillars":["","","",""],"posting_mix":[{{"type":"Content","pct":35}},{{"type":"Educational","pct":25}},{{"type":"Engagement","pct":25}},{{"type":"Promotional","pct":15}}],"channel_recommendations":["","",""]}},
+      "platform_scores": {{}},
+      "competitive_signals": {{"pricing_position":"unknown","pricing_notes":"Competitor analysis running...","main_competitors":[],"competitive_advantage":"","market_gaps":""}},
+      "review_signals": {{"sentiment":"unknown","review_themes":[],"reputation_notes":""}},
+      "signal_confidence": "Low",
+      "coverage_notes": "Initial fast analysis — full intelligence report loading in background.",
+      "cover_letter_snippet": "string",
+      "ai_methodology_note": "Fast GPT pass — full multi-model analysis with competitor + trend intelligence loading."
+    }}
+    Fill ALL fields with real analysis based on data provided.
+    """)
+    r = gpt_client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+        temperature=0.2,
+        max_tokens=2000,
+    )
+    return json.loads(r.choices[0].message.content.strip())
+
+
+def run_deep_job(job_id, business_name, location, website_pages, social_text,
+                 review_text, pricing_text, competitors, mode,
+                 booking_cards, trend_data, ck):
+    """
+    Runs in a background thread. Executes the full pipeline and stores result in JOBS.
+    Also updates the cache when done.
+    """
+    try:
+        JOBS[job_id] = {"status": "running"}
+        report = run_full_pipeline(
+            business_name, location,
+            website_pages, social_text,
+            review_text, pricing_text,
+            competitors, mode,
+        )
+        report["company"] = business_name
+        report["_pipeline_mode"]    = mode
+        report["_complexity_score"] = compute_complexity(website_pages, social_text, review_text, competitors)
+
+        data_quality    = build_data_quality(website_pages, social_text, review_text, competitors)
+        routing_reasons = build_routing_reasons(website_pages, social_text, review_text, competitors, data_quality)
+
+        agent_brain = {
+            "complexity_score":    compute_complexity(website_pages, social_text, review_text, competitors),
+            "pipeline_mode":       mode,
+            "routing_reasons":     routing_reasons,
+            "data_quality":        data_quality,
+            "booking_competitors": booking_cards,
+            "trend_intelligence":  trend_data,
+        }
+
+        response_data = {"report": report, "agent_brain": agent_brain}
+        set_cache(ck, response_data)
+        JOBS[job_id] = {"status": "done", "result": response_data}
+        print(f"  ✓ Deep job {job_id} complete")
+
+    except Exception as e:
+        print(f"  ✗ Deep job {job_id} failed: {e}")
+        JOBS[job_id] = {"status": "error", "error": str(e)}
+
+
 def run_full_pipeline(business_name, location, website_pages, social_text,
                       review_text, pricing_text, competitors, mode):
     """
@@ -900,6 +1013,237 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         return json.loads(r.choices[0].message.content.strip())
 
 
+@app.route('/job/<job_id>', methods=['GET'])
+def job_status(job_id):
+    """Poll for deep analysis completion."""
+    job = JOBS.get(job_id)
+    if not job:
+        return jsonify({"status": "not_found"}), 404
+    return jsonify(job)
+
+
+# ─── /agent ENDPOINT ──────────────────────────────────────────────────────────
+
+@app.route('/agent', methods=['POST'])
+def agent():
+    # ── Auth ──────────────────────────────────────────────────────────────────
+    code_type = get_code_type(request)
+    if code_type is None:
+        return jsonify({"error": "Access denied. Valid access code required."}), 401
+
+    if code_type == "guest":
+        ip    = request.remote_addr
+        token = request.headers.get("X-Agent-Token", "").strip().lower()
+        if not check_rate_limit(REQUEST_LOG, f"{ip}:{token}", RATE_LIMIT_AGENT):
+            return jsonify({"error": "Rate limit exceeded — 10 analyses per hour."}), 429
+
+    init_clients()
+    if not gpt_client or not claude_client:
+        return jsonify({"error": "API keys not configured on backend"}), 500
+
+    body = request.get_json(force=True, silent=True) or {}
+    if isinstance(body, str):
+        try: body = json.loads(body)
+        except: body = {}
+
+    business_name = body.get('business_name', '')
+    website_url   = body.get('website', '')
+    location      = body.get('location', '')
+    industry      = body.get('industry', '')
+    user_content  = body.get('user_content', '')
+
+    if not business_name:
+        return jsonify({"error": "business_name is required"}), 400
+
+    manual_socials = {
+        k: body.get(k) for k in ['instagram','tiktok','facebook','twitter','linkedin']
+        if body.get(k)
+    }
+
+    if not website_url and not manual_socials:
+        return jsonify({"error": "Provide at least a website URL or one social profile"}), 400
+
+    # ── Cache check ───────────────────────────────────────────────────────────
+    ck = cache_key(business_name, website_url, location)
+    cached = get_cached(ck)
+    if cached and not user_content:
+        cached["_from_cache"] = True
+        return jsonify(cached)
+
+    # ── Scrape website ────────────────────────────────────────────────────────
+    website_pages = {}
+    social_links  = manual_socials.copy()
+
+    if website_url:
+        if not website_url.startswith("http"):
+            website_url = "https://" + website_url
+        html, _ = safe_get(website_url)
+        if html:
+            website_pages["homepage"] = extract_text(html, 3000)
+            detected = find_social_links(html)
+            for k, v in detected.items():
+                if k not in social_links:
+                    social_links[k] = v
+        # Only scrape 2 subpages to keep it fast
+        for slug in ["/about", "/services"]:
+            h, code = safe_get(website_url.rstrip("/") + slug)
+            if h and isinstance(code, int) and code < 400:
+                text = extract_text(h, 1500)
+                if text: website_pages[slug.lstrip("/")] = text
+    else:
+        results = search_web(f'"{business_name}" {location} official website', 3)
+        for r in results:
+            u = r.get("url", "")
+            skip = ["yelp","google","facebook","instagram","tiktok","twitter","linkedin","bing"]
+            if u and not any(s in u for s in skip):
+                html, _ = safe_get(u)
+                if html:
+                    website_pages["homepage"] = extract_text(html, 3000)
+                    detected = find_social_links(html)
+                    for k, v in detected.items():
+                        if k not in social_links:
+                            social_links[k] = v
+                break
+
+    # ── Scrape social (Layer 1 only for speed) ────────────────────────────────
+    social_text = {}
+    for platform, url in social_links.items():
+        h, _ = safe_get(url)
+        if h:
+            text = extract_text(h, 1500)
+            if len(text) > 200:
+                social_text[platform] = text
+        time.sleep(0.2)
+
+    # User content
+    if user_content:
+        if user_content.startswith("http") and any(p in user_content for p in ["instagram","tiktok","twitter","linkedin","facebook"]):
+            h, _ = safe_get(user_content)
+            if h:
+                fetched = extract_text(h, 2000)
+                if len(fetched) > 200:
+                    platform_hint = next((p for p in ["instagram","tiktok","twitter","linkedin","facebook"] if p in user_content), "social")
+                    social_text[platform_hint] = f"[USER-PROVIDED URL]:\n{fetched}"
+        else:
+            social_text["user_provided"] = f"[USER-PROVIDED CONTENT — highest confidence]:\n{user_content}"
+
+    # ── FAST RESPONSE — run GPT immediately, return to user ───────────────────
+    try:
+        fast_report = run_fast_pipeline(business_name, location, website_pages, social_text)
+        fast_report["company"] = business_name
+    except Exception as e:
+        fast_report = {"company": business_name, "error": str(e), "overall_score": 0}
+
+    # ── DEEP ANALYSIS — run in background thread ──────────────────────────────
+    job_id = str(uuid.uuid4())[:8]
+    JOBS[job_id] = {"status": "running"}
+
+    def deep_work():
+        try:
+            # Collect remaining data
+            pages = dict(website_pages)
+
+            # Layer 2+3 social
+            for platform, url in social_links.items():
+                if platform in social_text and len(social_text.get(platform,"")) > 500:
+                    continue
+                handle = url.rstrip("/").split("/")[-1].lstrip("@")
+                site_map = {
+                    "instagram": f"site:instagram.com/{handle}",
+                    "tiktok":    f"site:tiktok.com/@{handle}",
+                    "twitter":   f"site:x.com/{handle}",
+                }
+                q = site_map.get(platform)
+                if q:
+                    results = search_web(q, 3)
+                    snippets = [r["body"] for r in results if r.get("body") and len(r["body"]) > 50]
+                    if snippets:
+                        social_text[platform] = social_text.get(platform,"") + "\n" + "\n".join(snippets[:3])
+
+            # Press mentions
+            press = search_web(f'"{business_name}" {location}', 3)
+            SKIP_PRESS = ["yelp.com","yellowpages.com","bbb.org","facebook.com"]
+            snippets = [f"[{r.get('title','')}]: {r['body']}" for r in press if r.get('body') and not any(s in r.get('url','') for s in SKIP_PRESS)]
+            if snippets: pages["press_mentions"] = "\n".join(snippets[:3])
+
+            # Reviews
+            rev_snips = search_web(f'"{business_name}" {location} reviews', 3)
+            rev_texts = [f"[{r['title']}]: {r['body']}" for r in rev_snips if r.get('body')]
+            yelp_r = search_web(f"{business_name} {location} yelp", 2)
+            for r in yelp_r:
+                if "yelp.com/biz/" in r.get("url",""):
+                    h, _ = safe_get(r["url"])
+                    if h: rev_texts.append("[Yelp]: " + extract_text(h, 2000))
+                    break
+            review_text = "\n".join(rev_texts)
+
+            # Pricing
+            flat = " ".join(pages.values())
+            pr = search_web(f"{business_name} pricing cost {industry}", 3)
+            pricing_text = "\n".join([f"[{r['title']}]: {r['body']}" for r in pr if r.get('body')])
+            prices = re.findall(r"\$[\d,]+(?:\.\d{2})?", flat)
+            if prices: pricing_text += "\n[Website prices]: " + ", ".join(set(prices[:8]))
+
+            # Trends
+            try:
+                trend_data = fetch_trend_intelligence(business_name, industry, location, pages)
+            except: trend_data = None
+            trend_text = format_trend_intelligence(trend_data)
+            if trend_text: pricing_text += "\n\n" + trend_text
+
+            # Booking
+            try:
+                booking_cards = scrape_booking_competitors(business_name, industry, location, 2)
+            except: booking_cards = []
+            booking_intel = format_booking_intelligence(booking_cards)
+            if booking_intel: pricing_text += "\n\n" + booking_intel
+
+            # Competitors
+            comp_results = search_web(f"{industry or business_name} {location}", 5)
+            seen = set(urlparse(c.get("url","")).netloc.replace("www.","") for c in booking_cards if c.get("url"))
+            competitors = [{"domain": urlparse(c["url"]).netloc.replace("www.",""), "title": c["name"],
+                           "body": f"Platform: {c['platform']} | Rating: {c.get('rating','N/A')}★ | ${c.get('avg_price','N/A')}"} for c in booking_cards]
+            SKIP = ["yelp.com","google.com","facebook.com","yellowpages.com","bbb.org","tripadvisor.com",
+                   "reddit.com","booksy.com","fresha.com","styleseat.com","vagaro.com","mindbody.io"]
+            for r in comp_results:
+                if len(competitors) >= 6: break
+                url = r.get("url","")
+                try: domain = urlparse(url).netloc.replace("www.","")
+                except: continue
+                if not domain or domain in seen or any(s in domain for s in SKIP): continue
+                seen.add(domain)
+                competitors.append({"domain": domain, "title": r.get("title",""), "body": r.get("body","")[:200]})
+
+            complexity = compute_complexity(pages, social_text, review_text, competitors)
+            mode = route_task(complexity)
+
+            run_deep_job(job_id, business_name, location, pages, social_text,
+                        review_text, pricing_text, competitors, mode,
+                        booking_cards, trend_data, ck)
+        except Exception as e:
+            JOBS[job_id] = {"status": "error", "error": str(e)}
+            print(f"  ✗ Deep work failed: {e}")
+
+    Thread(target=deep_work, daemon=True).start()
+
+    # ── Return fast report immediately ────────────────────────────────────────
+    fast_brain = {
+        "complexity_score": 0,
+        "pipeline_mode":    "fast",
+        "routing_reasons":  [f"Fast analysis — deep intelligence loading (job: {job_id})"],
+        "data_quality":     build_data_quality(website_pages, social_text, "", []),
+        "booking_competitors": [],
+        "trend_intelligence":  None,
+    }
+
+    return jsonify({
+        "report":      fast_report,
+        "agent_brain": fast_brain,
+        "job_id":      job_id,
+        "status":      "processing",
+    })
+
+
 @app.route('/validate', methods=['POST'])
 def validate():
     """Check if an access code is valid. Frontend calls this before unlocking."""
@@ -917,314 +1261,6 @@ def validate():
     return jsonify({"valid": False, "code_type": None})
 
 
-# ─── /agent ENDPOINT ──────────────────────────────────────────────────────────
-
-@app.route('/agent', methods=['POST'])
-def agent():
-    # ── Auth check ────────────────────────────────────────────────────────────
-    code_type = get_code_type(request)
-    if code_type is None:
-        return jsonify({"error": "Access denied. Valid access code required."}), 401
-
-    # ── Rate limit — master code is exempt, guests get 10/hour ─────────────
-    if code_type == "guest":
-        ip    = request.remote_addr
-        token = request.headers.get("X-Agent-Token", "").strip().lower()
-        if not check_rate_limit(REQUEST_LOG, f"{ip}:{token}", RATE_LIMIT_AGENT):
-            return jsonify({"error": "Rate limit exceeded — 10 analyses per hour."}), 429
-
-    init_clients()
-    if not gpt_client or not claude_client:
-        return jsonify({"error": "API keys not configured on backend"}), 500
-
-    body = request.get_json(force=True, silent=True) or {}
-    if isinstance(body, str):
-        try:
-            body = json.loads(body)
-        except Exception:
-            body = {}
-    business_name = body.get('business_name', '')
-    website_url   = body.get('website', '')
-    location      = body.get('location', '')
-    industry      = body.get('industry', '')
-    user_content  = body.get('user_content', '')  # pasted captions OR profile URL
-
-    # ── Cache check — return instantly if we've analyzed this recently ────────
-    ck = cache_key(business_name, website_url, location)
-    cached = get_cached(ck)
-    if cached and not user_content:
-        # Don't use cache if user provided custom content — they want fresh analysis
-        cached["_from_cache"] = True
-        return jsonify(cached)
-
-    # Optional manual social hints — now includes facebook
-    manual_socials = {
-        k: body.get(k) for k in ['instagram','tiktok','facebook','twitter','linkedin']
-        if body.get(k)
-    }
-
-    if not business_name:
-        return jsonify({"error": "business_name is required"}), 400
-    if not website_url and not manual_socials:
-        return jsonify({"error": "Provide at least a website URL or one social profile"}), 400
-
-    # ── Scrape ────────────────────────────────────────────────────────────────
-    website_pages = {}
-    homepage_html = ""
-    social_links  = manual_socials.copy()
-
-    # Website scraping — only if URL provided
-    if website_url:
-        if not website_url.startswith("http"):
-            website_url = "https://" + website_url
-
-        html, _ = safe_get(website_url)
-        if html:
-            website_pages["homepage"] = extract_text(html, 3000)
-            homepage_html = html
-            detected = find_social_links(html)
-            for k, v in detected.items():
-                if k not in social_links:
-                    social_links[k] = v
-
-        for slug in ["/about", "/about-us", "/services", "/pricing", "/contact"]:
-            h, code = safe_get(website_url.rstrip("/") + slug)
-            if h and isinstance(code, int) and code < 400:
-                text = extract_text(h, 1500)
-                if text: website_pages[slug.lstrip("/")] = text
-    else:
-        # No website — search for one automatically
-        print(f"  → No website provided, searching for {business_name}...")
-        results = search_web(f'"{business_name}" {location} official website', 3)
-        for r in results:
-            u = r.get("url", "")
-            skip = ["yelp","google","facebook","instagram","tiktok","twitter","linkedin","bing"]
-            if u and not any(s in u for s in skip):
-                html, _ = safe_get(u)
-                if html:
-                    website_pages["homepage"] = extract_text(html, 3000)
-                    detected = find_social_links(html)
-                    for k, v in detected.items():
-                        if k not in social_links:
-                            social_links[k] = v
-                break
-
-    # ── Social signals — 3-layer approach ───────────────────────────────────
-    social_text = {}
-
-    # Layer 1: Scrape detected/manual profile pages directly
-    for platform, url in social_links.items():
-        h, _ = safe_get(url)
-        if h:
-            text = extract_text(h, 1500)
-            if len(text) > 200:
-                social_text[platform] = text
-        time.sleep(0.3)
-
-    # Layer 2: DuckDuckGo site: search — pulls cached posts/captions
-    # Works even when direct profile scraping is blocked
-    for platform, url in social_links.items():
-        if platform in social_text and len(social_text[platform]) > 500:
-            continue  # already have good data
-        handle = url.rstrip("/").split("/")[-1].lstrip("@")
-        if not handle:
-            continue
-        site_map = {
-            "instagram": f"site:instagram.com/{handle}",
-            "tiktok":    f"site:tiktok.com/@{handle}",
-            "twitter":   f"site:x.com/{handle} OR site:twitter.com/{handle}",
-            "linkedin":  f"site:linkedin.com {handle}",
-        }
-        query = site_map.get(platform)
-        if not query:
-            continue
-        results = search_web(query, 5)
-        snippets = [r["body"] for r in results if r.get("body") and len(r["body"]) > 50]
-        if snippets:
-            combined = f"[{platform.upper()} cached content via search]:\n" + "\n".join(snippets[:4])
-            if platform in social_text:
-                social_text[platform] += "\n" + combined
-            else:
-                social_text[platform] = combined
-
-    # Layer 3: If still no social data, search for profiles + content by name
-    if not social_text:
-        for platform in ["instagram", "tiktok", "twitter"]:
-            results = search_web(f'"{business_name}" {platform} {location}', 4)
-            snippets = []
-            for r in results:
-                r_url  = r.get("url", "")
-                r_body = r.get("body", "")
-                if platform in r_url.lower() and r_body:
-                    snippets.append(r_body)
-                elif r_body and platform in r_body.lower():
-                    snippets.append(r_body)
-            if snippets:
-                social_text[platform] = f"[{platform.upper()} signals via web search]:\n" + "\n".join(snippets[:3])
-
-    # ── User-provided content (highest confidence — direct signal) ────────────
-    # Accepts: pasted captions OR a profile URL the agent couldn't auto-detect
-    user_content = body.get("user_content", "").strip()
-    if user_content:
-        # Check if it looks like a URL — try to fetch it
-        if user_content.startswith("http") and any(p in user_content for p in ["instagram","tiktok","twitter","linkedin","facebook"]):
-            h, _ = safe_get(user_content)
-            if h:
-                fetched = extract_text(h, 2000)
-                if len(fetched) > 200:
-                    platform_hint = next((p for p in ["instagram","tiktok","twitter","linkedin","facebook"] if p in user_content), "social")
-                    social_text[platform_hint] = f"[USER-PROVIDED URL — {platform_hint}]:\n{fetched}"
-                else:
-                    # Fetch failed or thin — treat as pasted text
-                    social_text["user_provided"] = f"[USER-PROVIDED CONTENT — direct signal]:\n{user_content}"
-            # Also run DuckDuckGo on the profile URL for cached posts
-            results = search_web(f"site:{user_content.split('//')[1].split('/')[0]} {user_content.rstrip('/').split('/')[-1]}", 4)
-            cached = [r["body"] for r in results if r.get("body")]
-            if cached:
-                key = next((p for p in ["instagram","tiktok","twitter","linkedin","facebook"] if p in user_content), "social")
-                social_text[key] = social_text.get(key, "") + "\n[Cached posts]:\n" + "\n".join(cached[:3])
-        else:
-            # Treat as pasted captions/text — highest confidence, use directly
-            social_text["user_provided"] = f"[USER-PROVIDED POSTS & CAPTIONS — direct signal, highest confidence]:\n{user_content}"
-
-    # ── Press & web mentions for thin sites ──────────────────────────────────
-    # Finds news articles, interviews, features — useful when website is minimal
-    press_results = search_web(f'"{business_name}" {location}', 3)
-    press_snippets = []
-    SKIP_PRESS = ["yelp.com", "yellowpages.com", "mapquest.com", "bbb.org", "facebook.com"]
-    for r in press_results:
-        r_url  = r.get("url", "")
-        r_body = r.get("body", "")
-        if r_body and not any(s in r_url for s in SKIP_PRESS):
-            press_snippets.append(f"[{r.get('title','')}]: {r_body}")
-    if press_snippets:
-        website_pages["press_mentions"] = "\n".join(press_snippets[:4])
-
-    # Reviews
-    q = f'"{business_name}" {location} reviews'
-    review_snippets = search_web(q, 3)
-    review_texts = [f"[{r['title']}]: {r['body']}" for r in review_snippets if r.get('body')]
-    yelp_results = search_web(f"{business_name} {location} yelp", 2)
-    for r in yelp_results:
-        if "yelp.com/biz/" in r.get("url",""):
-            h, _ = safe_get(r["url"])
-            if h: review_texts.append("[Yelp]: " + extract_text(h, 2000))
-            break
-    review_text = "\n".join(review_texts)
-
-    # Pricing
-    website_flat = " ".join(website_pages.values())
-    pricing_results = search_web(f"{business_name} pricing cost {industry}", 5)
-    pricing_text = "\n".join([f"[{r['title']}]: {r['body']}" for r in pricing_results if r.get('body')])
-    prices = re.findall(r"\$[\d,]+(?:\.\d{2})?", website_flat)
-    if prices: pricing_text += "\n[Website prices]: " + ", ".join(set(prices[:12]))
-
-    # ── Trend + Booking — sequential with tight timeouts ─────────────────────
-    trend_data    = None
-    booking_cards = []
-
-    # Trends first — uses search_web which has built-in timeout
-    try:
-        trend_data = fetch_trend_intelligence(business_name, industry, location, website_pages)
-    except Exception as e:
-        print(f"  ⚠ Trend fetch failed: {e}")
-        trend_data = None
-
-    # Booking platforms second
-    try:
-        booking_cards = scrape_booking_competitors(business_name, industry, location, 2)
-    except Exception as e:
-        print(f"  ⚠ Booking fetch failed: {e}")
-        booking_cards = []
-
-    trend_text = format_trend_intelligence(trend_data)
-    if trend_text:
-        pricing_text += "\n\n" + trend_text
-
-    booking_intel = format_booking_intelligence(booking_cards)
-    if booking_intel:
-        pricing_text += "\n\n" + booking_intel
-
-    # Web search fallback for businesses not on booking platforms
-    comp_results = search_web(f"{industry or business_name} {location}", 6)
-    seen_domains = set()
-    # Pre-seed seen domains from booking cards so we don't double-count
-    for card in booking_cards:
-        try:
-            seen_domains.add(urlparse(card["url"]).netloc.replace("www.",""))
-        except: pass
-
-    competitors = []
-    # Add booking cards as structured competitors first
-    for card in booking_cards:
-        competitors.append({
-            "domain":   urlparse(card["url"]).netloc.replace("www.",""),
-            "title":    card["name"],
-            "body":     f"Platform: {card['platform']} | Rating: {card.get('rating','N/A')}★ | Avg price: ${card.get('avg_price','N/A')} | Services: {', '.join(card.get('services',[])[:4])}",
-            "platform": card["platform"],
-            "rating":   card.get("rating"),
-            "avg_price":card.get("avg_price"),
-            "pricing_position": card.get("pricing_position","unknown"),
-        })
-
-    # Fill remaining slots from web search
-    SKIP = ["yelp.com","google.com","facebook.com","yellowpages.com","bbb.org",
-            "tripadvisor.com","reddit.com","booksy.com","fresha.com",
-            "styleseat.com","vagaro.com","mindbody.io"]
-    for r in comp_results:
-        if len(competitors) >= 8: break
-        url = r.get("url","")
-        try: domain = urlparse(url).netloc.replace("www.","")
-        except: continue
-        if not domain or domain in seen_domains or any(s in domain for s in SKIP): continue
-        seen_domains.add(domain)
-        competitors.append({"domain": domain, "title": r.get("title",""), "body": r.get("body","")[:300]})
-
-    # ── Route ─────────────────────────────────────────────────────────────────
-    complexity = compute_complexity(website_pages, social_text, review_text, competitors)
-    mode       = route_task(complexity)
-
-    # ── Run pipeline ──────────────────────────────────────────────────────────
-    try:
-        report = run_full_pipeline(
-            business_name, location,
-            website_pages, social_text,
-            review_text, pricing_text,
-            competitors, mode,
-        )
-    except json.JSONDecodeError as e:
-        return jsonify({"error": f"AI output parse error: {str(e)}"}), 500
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    # Guarantee fields
-    report["company"] = business_name
-    report["_pipeline_mode"]    = mode
-    report["_complexity_score"] = complexity
-
-    # ── Build agent_brain ─────────────────────────────────────────────────────
-    data_quality = build_data_quality(website_pages, social_text, review_text, competitors)
-    routing_reasons = build_routing_reasons(website_pages, social_text, review_text, competitors, data_quality)
-
-    agent_brain = {
-        "complexity_score":    complexity,
-        "pipeline_mode":       mode,
-        "routing_reasons":     routing_reasons,
-        "data_quality":        data_quality,
-        "access_type":         code_type,
-        "booking_competitors": booking_cards,
-        "trend_intelligence":  trend_data,
-    }
-
-    response_data = {
-        "report":      report,
-        "agent_brain": agent_brain,
-    }
-
-    # Cache the full response for 24 hours
-    set_cache(ck, response_data)
-
-    return jsonify(response_data)
 
 
 @app.route('/health', methods=['GET'])
