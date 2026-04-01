@@ -30,6 +30,30 @@ VALIDATE_LOG = defaultdict(list)  # ip → [timestamps]
 
 RATE_LIMIT_VALIDATE = 20   # max /validate attempts per IP per hour
 
+# ─── RESPONSE CACHE ───────────────────────────────────────────────────────────
+# Caches full agent responses by business name + location for 24 hours.
+# Repeat analyses on the same business return instantly and cost nothing.
+CACHE     = {}          # key → (response_data, timestamp)
+CACHE_TTL = 86400       # 24 hours in seconds
+
+def cache_key(business_name, website_url, location):
+    """Build a consistent cache key."""
+    base = f"{business_name.lower().strip()}:{location.lower().strip()}:{website_url.lower().strip()}"
+    return re.sub(r'[^a-z0-9:.]', '_', base)[:120]
+
+def get_cached(key):
+    """Return cached response if still fresh, else None."""
+    if key in CACHE:
+        data, ts = CACHE[key]
+        if time.time() - ts < CACHE_TTL:
+            return data
+        del CACHE[key]
+    return None
+
+def set_cache(key, data):
+    """Store response in cache."""
+    CACHE[key] = (data, time.time())
+
 RATE_LIMIT_AGENT = 10  # requests per hour per user (master is exempt)
 
 def check_rate_limit(log, key, limit, window=3600):
@@ -926,6 +950,14 @@ def agent():
     industry      = body.get('industry', '')
     user_content  = body.get('user_content', '')  # pasted captions OR profile URL
 
+    # ── Cache check — return instantly if we've analyzed this recently ────────
+    ck = cache_key(business_name, website_url, location)
+    cached = get_cached(ck)
+    if cached and not user_content:
+        # Don't use cache if user provided custom content — they want fresh analysis
+        cached["_from_cache"] = True
+        return jsonify(cached)
+
     # Optional manual social hints — now includes facebook
     manual_socials = {
         k: body.get(k) for k in ['instagram','tiktok','facebook','twitter','linkedin']
@@ -1022,12 +1054,12 @@ def agent():
             results = search_web(f'"{business_name}" {platform} {location}', 4)
             snippets = []
             for r in results:
-                url = r.get("url", "")
-                body = r.get("body", "")
-                if platform in url.lower() and body:
-                    snippets.append(body)
-                elif body and platform in body.lower():
-                    snippets.append(body)
+                r_url  = r.get("url", "")
+                r_body = r.get("body", "")
+                if platform in r_url.lower() and r_body:
+                    snippets.append(r_body)
+                elif r_body and platform in r_body.lower():
+                    snippets.append(r_body)
             if snippets:
                 social_text[platform] = f"[{platform.upper()} signals via web search]:\n" + "\n".join(snippets[:3])
 
@@ -1062,10 +1094,10 @@ def agent():
     press_snippets = []
     SKIP_PRESS = ["yelp.com", "yellowpages.com", "mapquest.com", "bbb.org", "facebook.com"]
     for r in press_results:
-        url = r.get("url", "")
-        body = r.get("body", "")
-        if body and not any(s in url for s in SKIP_PRESS):
-            press_snippets.append(f"[{r.get('title','')}]: {body}")
+        r_url  = r.get("url", "")
+        r_body = r.get("body", "")
+        if r_body and not any(s in r_url for s in SKIP_PRESS):
+            press_snippets.append(f"[{r.get('title','')}]: {r_body}")
     if press_snippets:
         website_pages["press_mentions"] = "\n".join(press_snippets[:4])
 
@@ -1185,10 +1217,15 @@ def agent():
         "trend_intelligence":  trend_data,
     }
 
-    return jsonify({
+    response_data = {
         "report":      report,
         "agent_brain": agent_brain,
-    })
+    }
+
+    # Cache the full response for 24 hours
+    set_cache(ck, response_data)
+
+    return jsonify(response_data)
 
 
 @app.route('/health', methods=['GET'])
