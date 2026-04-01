@@ -19,7 +19,6 @@ import json
 import time
 import textwrap
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -525,7 +524,7 @@ def fetch_trend_intelligence(business_name, industry, location, website_pages):
         return None
     print(f"  → Trend keywords: {keywords[:3]}")
     all_trends = []
-    for keyword in keywords[:3]:
+    for keyword in keywords[:2]:
         all_trends.extend(scrape_tiktok_trends(keyword))
         all_trends.extend(scrape_instagram_trends(keyword))
         time.sleep(0.3)
@@ -1120,23 +1119,23 @@ def agent():
     prices = re.findall(r"\$[\d,]+(?:\.\d{2})?", website_flat)
     if prices: pricing_text += "\n[Website prices]: " + ", ".join(set(prices[:12]))
 
-    # ── Trend + Booking — run in parallel to save time ──────────────────────
-    trend_data   = None
+    # ── Trend + Booking — sequential with tight timeouts ─────────────────────
+    trend_data    = None
     booking_cards = []
+
+    # Trends first — uses search_web which has built-in timeout
     try:
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            future_trends  = executor.submit(fetch_trend_intelligence, business_name, industry, location, website_pages)
-            future_booking = executor.submit(scrape_booking_competitors, business_name, industry, location, 4)
-            try:
-                trend_data = future_trends.result(timeout=25)
-            except Exception:
-                trend_data = None
-            try:
-                booking_cards = future_booking.result(timeout=25)
-            except Exception:
-                booking_cards = []
-    except Exception:
-        pass
+        trend_data = fetch_trend_intelligence(business_name, industry, location, website_pages)
+    except Exception as e:
+        print(f"  ⚠ Trend fetch failed: {e}")
+        trend_data = None
+
+    # Booking platforms second
+    try:
+        booking_cards = scrape_booking_competitors(business_name, industry, location, 2)
+    except Exception as e:
+        print(f"  ⚠ Booking fetch failed: {e}")
+        booking_cards = []
 
     trend_text = format_trend_intelligence(trend_data)
     if trend_text:
