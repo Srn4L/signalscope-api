@@ -46,7 +46,7 @@ import requests as req
 from bs4 import BeautifulSoup
 from openai import OpenAI
 from anthropic import Anthropic
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 from urllib.parse import urlparse
 
 app = Flask(__name__)
