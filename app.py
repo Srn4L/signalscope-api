@@ -752,7 +752,7 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
 
     except Exception as e:
         print(f"  ✗ Deep job {job_id} failed: {e}")
-        JOBS[job_id] = {"status": "error", "error": str(e)}
+        JOBS[job_id] = {"status": "error", "error": str(e), "ts": time.time()}
 
 
 def run_full_pipeline(business_name, location, website_pages, social_text,
@@ -844,43 +844,49 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         structured = json.loads(r1.choices[0].message.content.strip())
 
         # Stage 2 — Claude: deep strategic analysis
+        # Build booking + trend context to inject directly
+        booking_context = format_booking_intelligence(competitors[:5]) if competitors else ""
+        trend_context   = format_trend_intelligence(
+            json.loads(pricing_text.split("=== TREND INTELLIGENCE")[1].split("===")[0].strip())
+            if "=== TREND INTELLIGENCE" in pricing_text else None
+        ) if "=== TREND INTELLIGENCE" in pricing_text else ""
+
         claude_prompt = textwrap.dedent(f"""
-        You are a senior growth strategist and brand intelligence analyst with deep expertise
-        in digital marketing for small businesses.
+        You are a senior growth strategist for small businesses. You have access to REAL market data.
 
-        You have been given structured marketing signals for: **{business_name}** ({location}).
+        BUSINESS: {business_name} ({location})
 
-        STRUCTURED DATA:
+        EXTRACTED SIGNALS:
         {json.dumps(structured, indent=2)}
 
-        Produce a comprehensive strategic analysis covering:
+        COMPETITOR & BOOKING INTELLIGENCE (REAL DATA — use specific numbers):
+        {pricing_text[:2000]}
 
-        1. OVERALL SIGNAL SCORE (0-100) — be honest, not generous
-        2. SCORES (0-100 each, with confidence: low/medium/high and specific evidence):
-           - content_consistency
-           - engagement_quality
-           - content_diversity
-           - brand_voice_clarity
-           - platform_coverage
-        3. KEY INSIGHT — single most actionable finding from this data
-        4. BRAND OVERVIEW — 2-3 sentences, data-driven, no fluff
-        5. TOP 3 STRENGTHS — specific, evidence-backed
-        6. TOP 3 WEAKNESSES — specific, evidence-backed, honest
-        7. CONTENT PATTERNS — themes, caption structure, posting frequency
-        8. SOCIAL STRATEGY ASSESSMENT — 3-4 sentences on current strategy and gaps
-        9. COMPETITIVE POSITION — pricing position, key gaps vs competitors
-        10. GROWTH EXPERIMENTS (exactly 4):
-            - What to test (specific)
-            - Which signal triggered it
-            - Falsifiable hypothesis with numeric prediction
-            - Metric, timeframe (days), Impact/Effort/Confidence (1-10 each)
-        11. STRATEGY BLUEPRINT — 4 content pillars, posting mix (%), channel priorities
-        12. PLATFORM SCORES — 0-100 for each detected and relevant missing platform
-        13. REPUTATION ANALYSIS — sentiment, themes, risks
-        14. SIGNAL COVERAGE NOTES — transparent about thin or missing data
+        RULES — STRICT:
+        - NEVER give generic advice like "post more consistently" or "expand platform presence"
+        - EVERY insight must reference specific data: competitor prices, ratings, trend names, or platform signals
+        - If competitors charge $X avg, say so and compare to this business
+        - If a trend is detected, name it specifically and say how this business can use it
+        - If review data exists, cite it directly
+        - Scores must reflect actual data quality — be honest, not generous
 
-        Be specific. Ground everything in actual data. Do NOT give generic advice.
-        Every insight must trace back to a specific signal.
+        Produce strategic analysis covering:
+        1. OVERALL SIGNAL SCORE (0-100) — honest
+        2. SCORES (0-100, confidence low/medium/high, with specific evidence from data above):
+           content_consistency, engagement_quality, content_diversity, brand_voice_clarity, platform_coverage
+        3. KEY INSIGHT — single most actionable finding backed by a specific data point
+        4. BRAND OVERVIEW — 2-3 sentences citing actual signals found
+        5. TOP 3 STRENGTHS — each must cite a specific signal or data point
+        6. TOP 3 WEAKNESSES — each must cite a specific gap or competitor advantage
+        7. CONTENT PATTERNS — what themes/formats are present or absent
+        8. SOCIAL STRATEGY — what they're doing and what they're missing, with specific platform context
+        9. COMPETITIVE POSITION — price vs market avg, rating vs competitors, specific gaps
+        10. GROWTH EXPERIMENTS (exactly 4) — each triggered by a specific signal found above,
+            with falsifiable hypothesis and numeric success threshold
+        11. STRATEGY BLUEPRINT — 4 pillars, posting mix %, channel priorities
+        12. PLATFORM SCORES — 0-100 per platform detected or relevant
+        13. REPUTATION — sentiment, specific review themes if found
+        14. COVERAGE NOTES — honest about what data was thin or missing
         """)
 
         r2 = claude_client.messages.create(
@@ -998,10 +1004,18 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
     # ── GPT ONLY: single fast pass (thin data) ────────────────────────────────
     else:
         prompt = textwrap.dedent(f"""
-        You are a marketing analyst. Generate a SignalScope report for {business_name} ({location}).
-        Be honest when signals are weak. Use whatever data is available.
+        You are a marketing analyst for small businesses. Be specific — never generic.
+
+        BUSINESS: {business_name} ({location})
 
         DATA: {json.dumps(raw_data)[:4000]}
+
+        STRICT RULES:
+        - Reference actual data found — prices, platforms, services, review sentiment
+        - Never say "post more consistently" or "expand platform presence" without specifics
+        - If pricing data exists, compare it to market norms
+        - If social platforms are missing, name which ones and why they matter for this niche
+        - Set signal_confidence to "Low" if data was thin — be honest
 
         Return ONLY valid JSON with these keys:
         company ("{business_name}"), industry, overall_score, key_insight,
@@ -1011,8 +1025,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         competitive_signals, review_signals, signal_confidence, coverage_notes,
         cover_letter_snippet, ai_methodology_note.
 
-        Generate all 4 experiments specific to this business. Set signal_confidence to
-        "Low" if data was thin. Be honest in coverage_notes.
+        Generate 4 specific experiments triggered by actual signals in the data.
         """)
 
         r = gpt_client.chat.completions.create(
@@ -1245,7 +1258,7 @@ def agent():
                 seen.add(domain)
                 competitors.append({"domain": domain, "title": r.get("title",""), "body": r.get("body","")[:200]})
 
-            complexity = compute_complexity(pages, social_text, review_text, competitors)
+            complexity = compute_complexity(pages, local_social, review_text, competitors)
             mode = route_task(complexity)
 
             run_deep_job(job_id, business_name, location, pages, local_social,
