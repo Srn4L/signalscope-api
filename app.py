@@ -59,6 +59,15 @@ def set_cache(key, data):
 # Stores deep pipeline results keyed by job_id
 # Resets on restart — fine for now
 JOBS = {}  # job_id → {"status": "running|done|error", "result": ..., "error": ...}
+JOBS_TTL = 600  # clean up finished jobs after 10 minutes
+
+def cleanup_jobs():
+    """Remove finished/errored jobs older than JOBS_TTL to prevent memory drift."""
+    now = time.time()
+    stale = [k for k, v in JOBS.items()
+             if v.get("status") in ("done","error") and now - v.get("ts", now) > JOBS_TTL]
+    for k in stale:
+        del JOBS[k]
 
 RATE_LIMIT_AGENT = 10  # requests per hour per user (master is exempt)
 
@@ -162,7 +171,7 @@ def init_clients():
 
 SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
 
-def safe_get(url, timeout=25):
+def safe_get(url, timeout=10):
     """
     Fetch a URL safely. Uses ScraperAPI if key is configured (handles
     blocked sites, Cloudflare, JS-rendered pages). Falls back to direct
@@ -186,7 +195,7 @@ def safe_get(url, timeout=25):
 
     # ── Direct request fallback ───────────────────────────────────────────────
     try:
-        r = req.get(url, headers=HEADERS, timeout=15)
+        r = req.get(url, headers=HEADERS, timeout=10)
         r.raise_for_status()
         return r.text, r.status_code
     except Exception as e:
@@ -645,16 +654,17 @@ def run_fast_pipeline(business_name, location, website_pages, social_text):
     """
     import textwrap
     raw = {
-        "website_pages": {k: v[:1500] for k, v in list(website_pages.items())[:2]},
-        "social_text":   {k: v[:1000] for k, v in list(social_text.items())[:2]},
+        "website_pages": {k: v[:1200] for k, v in list(website_pages.items())[:2]},
+        "social_text":   {k: v[:800]  for k, v in list(social_text.items())[:2]},
     }
     prompt = textwrap.dedent(f"""
-    You are a marketing analyst. Generate a quick SignalScope report for {business_name} ({location}).
-    Use only the data provided. Be honest when signals are thin.
+    You are a marketing analyst. Generate a SignalScope report for {business_name} ({location}).
+    Use the data provided. Extract every signal you can — brand voice, pricing, services, platforms.
+    Be specific. Even if data is limited, give real observations not generic advice.
 
-    DATA: {json.dumps(raw)[:3000]}
+    DATA: {json.dumps(raw)[:4000]}
 
-    Return ONLY valid JSON:
+    Return ONLY valid JSON — fill every field with real analysis:
     {{
       "company": "{business_name}",
       "industry": "string",
@@ -735,7 +745,9 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
 
         response_data = {"report": report, "agent_brain": agent_brain}
         set_cache(ck, response_data)
-        JOBS[job_id] = {"status": "done", "result": response_data}
+        if booking_cards: set_cache(ck + '_booking', booking_cards)
+        if trend_data:    set_cache(ck + '_trends',  trend_data)
+        JOBS[job_id] = {"status": "done", "result": response_data, "ts": time.time()}
         print(f"  ✓ Deep job {job_id} complete")
 
     except Exception as e:
@@ -1026,6 +1038,7 @@ def job_status(job_id):
 
 @app.route('/agent', methods=['POST'])
 def agent():
+    if len(JOBS) > 100: cleanup_jobs()  # cap size + remove stale jobs
     # ── Auth ──────────────────────────────────────────────────────────────────
     code_type = get_code_type(request)
     if code_type is None:
@@ -1079,13 +1092,13 @@ def agent():
             website_url = "https://" + website_url
         html, _ = safe_get(website_url)
         if html:
-            website_pages["homepage"] = extract_text(html, 3000)
+            website_pages["homepage"] = extract_text(html, 1500)
             detected = find_social_links(html)
             for k, v in detected.items():
                 if k not in social_links:
                     social_links[k] = v
         # Only scrape 2 subpages to keep it fast
-        for slug in ["/about", "/services"]:
+        for slug in ["/about"]:
             h, code = safe_get(website_url.rstrip("/") + slug)
             if h and isinstance(code, int) and code < 400:
                 text = extract_text(h, 1500)
@@ -1098,22 +1111,29 @@ def agent():
             if u and not any(s in u for s in skip):
                 html, _ = safe_get(u)
                 if html:
-                    website_pages["homepage"] = extract_text(html, 3000)
+                    website_pages["homepage"] = extract_text(html, 1500)
                     detected = find_social_links(html)
                     for k, v in detected.items():
                         if k not in social_links:
                             social_links[k] = v
                 break
 
-    # ── Scrape social (Layer 1 only for speed) ────────────────────────────────
+    # ── Scrape social — parallel fetches ─────────────────────────────────────
     social_text = {}
-    for platform, url in social_links.items():
-        h, _ = safe_get(url)
-        if h:
-            text = extract_text(h, 1500)
-            if len(text) > 200:
-                social_text[platform] = text
-        time.sleep(0.2)
+    if social_links:
+        from concurrent.futures import ThreadPoolExecutor as _SPE
+        def _fetch_social(item):
+            platform, url = item
+            h, _ = safe_get(url)
+            if h:
+                text = extract_text(h, 1500)
+                if len(text) > 200:
+                    return platform, text
+            return platform, None
+        with _SPE(max_workers=4) as ex:
+            for platform, text in ex.map(_fetch_social, social_links.items()):
+                if text:
+                    social_text[platform] = text
 
     # User content
     if user_content:
@@ -1140,12 +1160,22 @@ def agent():
 
     def deep_work():
         try:
-            # Collect remaining data
-            pages = dict(website_pages)
+            pages        = dict(website_pages)
+            local_social = dict(social_text)  # clone — never mutate shared state across threads
+
+            # Collect trends + booking — use cache if available
+            cached_trends  = get_cached(ck + '_trends')
+            cached_booking = get_cached(ck + '_booking')
+            try:
+                trend_data = cached_trends or fetch_trend_intelligence(business_name, industry, location, pages)
+            except: trend_data = None
+            try:
+                booking_cards = cached_booking or scrape_booking_competitors(business_name, industry, location, 2)
+            except: booking_cards = []
 
             # Layer 2+3 social
             for platform, url in social_links.items():
-                if platform in social_text and len(social_text.get(platform,"")) > 500:
+                if platform in social_text and len(local_social.get(platform,"")) > 500:
                     continue
                 handle = url.rstrip("/").split("/")[-1].lstrip("@")
                 site_map = {
@@ -1158,17 +1188,26 @@ def agent():
                     results = search_web(q, 3)
                     snippets = [r["body"] for r in results if r.get("body") and len(r["body"]) > 50]
                     if snippets:
-                        social_text[platform] = social_text.get(platform,"") + "\n" + "\n".join(snippets[:3])
+                        local_social[platform] = local_social.get(platform,"") + "\n" + "\n".join(snippets[:3])
+
+            # Parallelize press + reviews + pricing searches
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            def _search(q): return search_web(q, 3)
+            with _TPE(max_workers=3) as ex:
+                f_press   = ex.submit(_search, f'"{business_name}" {location}')
+                f_reviews = ex.submit(_search, f'"{business_name}" {location} reviews')
+                f_pricing = ex.submit(_search, f'{business_name} pricing cost {industry}')
+                press_results   = f_press.result()
+                review_snippets = f_reviews.result()
+                pricing_results = f_pricing.result()
 
             # Press mentions
-            press = search_web(f'"{business_name}" {location}', 3)
             SKIP_PRESS = ["yelp.com","yellowpages.com","bbb.org","facebook.com"]
-            snippets = [f"[{r.get('title','')}]: {r['body']}" for r in press if r.get('body') and not any(s in r.get('url','') for s in SKIP_PRESS)]
+            snippets = [f"[{r.get('title','')}]: {r['body']}" for r in press_results if r.get('body') and not any(s in r.get('url','') for s in SKIP_PRESS)]
             if snippets: pages["press_mentions"] = "\n".join(snippets[:3])
 
             # Reviews
-            rev_snips = search_web(f'"{business_name}" {location} reviews', 3)
-            rev_texts = [f"[{r['title']}]: {r['body']}" for r in rev_snips if r.get('body')]
+            rev_texts = [f"[{r['title']}]: {r['body']}" for r in review_snippets if r.get('body')]
             yelp_r = search_web(f"{business_name} {location} yelp", 2)
             for r in yelp_r:
                 if "yelp.com/biz/" in r.get("url",""):
@@ -1179,22 +1218,14 @@ def agent():
 
             # Pricing
             flat = " ".join(pages.values())
-            pr = search_web(f"{business_name} pricing cost {industry}", 3)
+            pr = pricing_results
             pricing_text = "\n".join([f"[{r['title']}]: {r['body']}" for r in pr if r.get('body')])
             prices = re.findall(r"\$[\d,]+(?:\.\d{2})?", flat)
             if prices: pricing_text += "\n[Website prices]: " + ", ".join(set(prices[:8]))
 
-            # Trends
-            try:
-                trend_data = fetch_trend_intelligence(business_name, industry, location, pages)
-            except: trend_data = None
+            # Add pre-collected trend + booking intelligence
             trend_text = format_trend_intelligence(trend_data)
             if trend_text: pricing_text += "\n\n" + trend_text
-
-            # Booking
-            try:
-                booking_cards = scrape_booking_competitors(business_name, industry, location, 2)
-            except: booking_cards = []
             booking_intel = format_booking_intelligence(booking_cards)
             if booking_intel: pricing_text += "\n\n" + booking_intel
 
@@ -1217,11 +1248,11 @@ def agent():
             complexity = compute_complexity(pages, social_text, review_text, competitors)
             mode = route_task(complexity)
 
-            run_deep_job(job_id, business_name, location, pages, social_text,
+            run_deep_job(job_id, business_name, location, pages, local_social,
                         review_text, pricing_text, competitors, mode,
                         booking_cards, trend_data, ck)
         except Exception as e:
-            JOBS[job_id] = {"status": "error", "error": str(e)}
+            JOBS[job_id] = {"status": "error", "error": str(e), "ts": time.time()}
             print(f"  ✗ Deep work failed: {e}")
 
     Thread(target=deep_work, daemon=True).start()
@@ -1230,7 +1261,7 @@ def agent():
     fast_brain = {
         "complexity_score": 0,
         "pipeline_mode":    "fast",
-        "routing_reasons":  [f"Fast analysis — deep intelligence loading (job: {job_id})"],
+        "routing_reasons":  [f"Fast analysis complete — enhancing with full intelligence (job: {job_id})"],
         "data_quality":     build_data_quality(website_pages, social_text, "", []),
         "booking_competitors": [],
         "trend_intelligence":  None,
