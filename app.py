@@ -196,6 +196,352 @@ def search_web(query, max_results=6):
     except: pass
     return snippets
 
+
+# ── BOOKING PLATFORM INTELLIGENCE ────────────────────────────────────────────
+
+BOOKING_PLATFORMS = {
+    "booksy":   {"domain": "booksy.com",    "search": "booksy.com/en-US/s/"},
+    "fresha":   {"domain": "fresha.com",    "search": "fresha.com"},
+    "styleseat":{"domain": "styleseat.com", "search": "styleseat.com"},
+    "vagaro":   {"domain": "vagaro.com",    "search": "vagaro.com"},
+    "mindbody": {"domain": "mindbody.io",   "search": "mindbodyonline.com"},
+    "yelp":     {"domain": "yelp.com",      "search": "yelp.com/biz"},
+}
+
+SERVICE_KEYWORDS = [
+    "haircut","blowout","color","highlights","balayage","keratin","extensions",
+    "braids","locs","twists","box braids","knotless","cornrows","natural hair",
+    "lashes","eyelash extensions","microblading","brow lamination","wax",
+    "facial","hydrafacial","microneedling","chemical peel","dermaplaning",
+    "massage","swedish","deep tissue","hot stone","prenatal",
+    "manicure","pedicure","nail art","gel","acrylic","dip powder",
+    "barber","fade","lineup","beard trim","shape up",
+    "botox","filler","lip flip","prp","iv therapy","weight loss",
+]
+
+def parse_booking_card(html, platform, url):
+    """Extract pricing, rating, services from a booking platform page."""
+    if not html:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text(separator=" ", strip=True).lower()
+    raw_text = re.sub(r"\s+", " ", text)
+
+    # Business name — try title tag first
+    name = ""
+    title_tag = soup.find("title")
+    if title_tag:
+        name = title_tag.get_text().strip().split("|")[0].split("-")[0].strip()
+
+    # Pricing — find dollar amounts with context
+    price_pattern = re.compile(r'\$\s*(\d+(?:\.\d{2})?)\s*(?:[-–]\s*\$\s*(\d+(?:\.\d{2})?))?')
+    prices_found = []
+    for m in price_pattern.finditer(raw_text):
+        lo = float(m.group(1))
+        hi = float(m.group(2)) if m.group(2) else lo
+        if 5 <= lo <= 2000:
+            prices_found.append((lo, hi, m.start()))
+
+    # Get surrounding context for top prices
+    pricing_signals = []
+    for lo, hi, pos in prices_found[:8]:
+        context = raw_text[max(0, pos-40):pos+40].strip()
+        label = f"${lo:.0f}" if lo == hi else f"${lo:.0f}–${hi:.0f}"
+        pricing_signals.append({"price": label, "context": context})
+
+    # Average price
+    avg_price = None
+    if prices_found:
+        all_vals = [(lo+hi)/2 for lo,hi,_ in prices_found]
+        avg_price = round(sum(all_vals) / len(all_vals))
+
+    # Rating
+    rating = None
+    rating_patterns = [
+        re.compile(r'(\d\.\d)\s*(?:out of\s*5|stars?|\()', re.I),
+        re.compile(r'rated\s+(\d\.\d)', re.I),
+        re.compile(r'(\d\.\d)\s*/\s*5', re.I),
+    ]
+    for pat in rating_patterns:
+        m = pat.search(raw_text)
+        if m:
+            val = float(m.group(1))
+            if 1.0 <= val <= 5.0:
+                rating = val
+                break
+
+    # Review count
+    review_count = None
+    rev_m = re.search(r'(\d+(?:,\d+)?)\s*(?:reviews?|ratings?)', raw_text)
+    if rev_m:
+        review_count = rev_m.group(1).replace(",", "")
+
+    # Services detected
+    services = list(set(kw for kw in SERVICE_KEYWORDS if kw in raw_text))[:10]
+
+    # Pricing position
+    if avg_price:
+        if avg_price < 50:   pricing_pos = "budget"
+        elif avg_price < 150: pricing_pos = "mid"
+        else:                 pricing_pos = "premium"
+    else:
+        pricing_pos = "unknown"
+
+    return {
+        "name":            name,
+        "platform":        platform,
+        "url":             url,
+        "rating":          rating,
+        "review_count":    review_count,
+        "avg_price":       avg_price,
+        "pricing_position": pricing_pos,
+        "pricing_signals": pricing_signals[:5],
+        "services":        services,
+    }
+
+
+def scrape_booking_competitors(business_name, industry, location, limit=5):
+    """
+    Search all 6 booking platforms for local competitors.
+    Returns a list of competitor cards with pricing, ratings, and services.
+    """
+    print(f"  → Booking platforms: searching {industry or business_name} in {location}...")
+
+    service_hint = industry or business_name
+    cards = []
+    seen_names = set()
+
+    for platform, cfg in BOOKING_PLATFORMS.items():
+        domain = cfg["domain"]
+
+        # Search for this service type + location on this platform
+        queries = [
+            f'site:{domain} "{service_hint}" "{location}"',
+            f'site:{domain} {service_hint} {location}',
+        ]
+
+        for query in queries:
+            results = search_web(query, max_results=4)
+            for r in results:
+                url = r.get("url", "")
+                if domain not in url:
+                    continue
+
+                # Skip if it looks like the business itself
+                biz_slug = re.sub(r'[^a-z0-9]', '', business_name.lower())
+                url_lower = url.lower()
+                if biz_slug[:6] in url_lower:
+                    continue
+
+                # Fetch the page
+                html, status = safe_get(url)
+                if not html or not isinstance(status, int) or status >= 400:
+                    # Use snippet as fallback
+                    snippet = r.get("body", "")
+                    if snippet and len(snippet) > 50:
+                        # Extract what we can from the snippet
+                        prices = re.findall(r'\$[\d,]+', snippet)
+                        rating_m = re.search(r'(\d\.\d)\s*(?:stars?|rating)', snippet, re.I)
+                        cards.append({
+                            "name":             r.get("title","").split("|")[0].split("-")[0].strip(),
+                            "platform":         platform,
+                            "url":              url,
+                            "rating":           float(rating_m.group(1)) if rating_m else None,
+                            "review_count":     None,
+                            "avg_price":        None,
+                            "pricing_position": "unknown",
+                            "pricing_signals":  [{"price": p, "context": ""} for p in prices[:3]],
+                            "services":         [],
+                            "source":           "snippet",
+                        })
+                    continue
+
+                card = parse_booking_card(html, platform, url)
+                if not card:
+                    continue
+
+                # Deduplicate by name
+                name_key = re.sub(r'[^a-z0-9]', '', card["name"].lower())[:12]
+                if name_key and name_key in seen_names:
+                    continue
+                if name_key:
+                    seen_names.add(name_key)
+
+                card["source"] = "scraped"
+                cards.append(card)
+
+                if len(cards) >= limit:
+                    break
+
+            if len(cards) >= limit:
+                break
+
+        time.sleep(0.3)  # be polite between platforms
+
+    print(f"  ✓ Booking intelligence: {len(cards)} competitor cards from {len(set(c['platform'] for c in cards))} platforms")
+    return cards[:limit]
+
+
+def format_booking_intelligence(cards):
+    """Format booking cards into a rich text block for the AI pipeline."""
+    if not cards:
+        return ""
+
+    lines = ["=== BOOKING PLATFORM COMPETITOR INTELLIGENCE ===\n"]
+    for i, c in enumerate(cards, 1):
+        lines.append(f"Competitor {i}: {c['name']} [{c['platform'].upper()}]")
+        lines.append(f"  URL: {c['url']}")
+        if c.get("rating"):
+            rev = f" ({c['review_count']} reviews)" if c.get("review_count") else ""
+            lines.append(f"  Rating: {c['rating']}★{rev}")
+        if c.get("avg_price"):
+            lines.append(f"  Avg Price: ${c['avg_price']} ({c['pricing_position']})")
+        if c.get("pricing_signals"):
+            for ps in c["pricing_signals"][:3]:
+                lines.append(f"  Price Signal: {ps['price']} — {ps['context'][:60]}")
+        if c.get("services"):
+            lines.append(f"  Services: {', '.join(c['services'][:6])}")
+        lines.append("")
+
+    # Market summary
+    rated = [c for c in cards if c.get("rating")]
+    priced = [c for c in cards if c.get("avg_price")]
+    if rated:
+        avg_rating = round(sum(c["rating"] for c in rated) / len(rated), 1)
+        lines.append(f"Market Avg Rating: {avg_rating}★ across {len(rated)} competitors")
+    if priced:
+        avg_price = round(sum(c["avg_price"] for c in priced) / len(priced))
+        lines.append(f"Market Avg Price: ${avg_price}")
+        positions = [c["pricing_position"] for c in priced]
+        dominant = max(set(positions), key=positions.count)
+        lines.append(f"Dominant Pricing Tier: {dominant}")
+
+    return "\n".join(lines)
+
+
+# ── TREND INTELLIGENCE ────────────────────────────────────────────────────────
+
+NICHE_KEYWORDS = {
+    "hair":       ["hairstyle trend", "hair color trend", "haircut trend", "hair tutorial"],
+    "braids":     ["box braids", "knotless braids", "braids trend", "protective styles"],
+    "lash":       ["lash extensions trend", "lash styles", "eyelash trend", "lash tech"],
+    "nails":      ["nail art trend", "nail design", "manicure trend", "nail tutorial"],
+    "barber":     ["barber fade trend", "haircut trend", "taper fade", "lineup"],
+    "skincare":   ["skincare trend", "facial treatment trend", "glow skin routine"],
+    "spa":        ["spa treatment trend", "massage trend", "wellness trend"],
+    "medspa":     ["botox trend", "filler trend", "aesthetic treatment trend"],
+    "brow":       ["brow lamination trend", "microblading trend", "eyebrow trend"],
+    "makeup":     ["makeup trend", "beauty trend", "makeup tutorial"],
+    "fitness":    ["workout trend", "fitness routine trend", "gym trend"],
+    "tax":        ["tax tips small business", "tax strategy", "small business tax"],
+    "restaurant": ["food trend", "restaurant marketing", "menu trend"],
+    "retail":     ["retail trend", "product trend", "ecommerce trend"],
+}
+
+def detect_niche_keywords(industry, business_name, website_pages):
+    combined = (industry + " " + business_name + " " + " ".join(list(website_pages.values())[:2])).lower()
+    matched = []
+    for niche, keywords in NICHE_KEYWORDS.items():
+        if niche in combined:
+            matched.extend(keywords)
+    if not matched:
+        words = re.findall(r'\b\w+\b', industry.lower()) if industry else []
+        matched = [f"{w} trend" for w in words[:2]] + [f"{business_name} trend"]
+    return list(set(matched))[:5]
+
+
+def scrape_tiktok_trends(keyword):
+    trends = []
+    for q in [f'site:tiktok.com "{keyword}" trending', f'"{keyword}" tiktok viral 2025 2026']:
+        results = search_web(q, max_results=4)
+        for r in results:
+            body = r.get("body","")
+            title = r.get("title","")
+            if not body: continue
+            views_m = re.search(r'([\d.]+[KkMmBb])\s*(?:views?|likes?|plays?)', body)
+            hashtags = re.findall(r'#\w+', body + title)
+            trends.append({
+                "title": title[:80], "snippet": body[:200],
+                "views": views_m.group(0) if views_m else None,
+                "hashtags": hashtags[:4], "source": "tiktok", "keyword": keyword,
+            })
+        if len(trends) >= 3: break
+    return trends[:4]
+
+
+def scrape_instagram_trends(keyword):
+    trends = []
+    results = search_web(f'site:instagram.com "{keyword}" trending', 4)
+    for r in results:
+        body = r.get("body","")
+        if not body: continue
+        hashtags = re.findall(r'#\w+', body + r.get("title",""))
+        trends.append({
+            "title": r.get("title","")[:80], "snippet": body[:200],
+            "hashtags": hashtags[:4], "source": "instagram", "keyword": keyword,
+        })
+    return trends[:3]
+
+
+def scrape_reddit_trends(keyword):
+    trends = []
+    results = search_web(f'site:reddit.com {keyword} 2025 OR 2026', 4)
+    for r in results:
+        body = r.get("body","")
+        if body and len(body) > 50:
+            trends.append({"title": r.get("title","")[:80], "snippet": body[:200], "source": "reddit"})
+    return trends[:3]
+
+
+def fetch_trend_intelligence(business_name, industry, location, website_pages):
+    print(f"  → Trend intelligence for niche: {industry or business_name}")
+    keywords = detect_niche_keywords(industry, business_name, website_pages)
+    if not keywords:
+        return None
+    print(f"  → Trend keywords: {keywords[:3]}")
+    all_trends = []
+    for keyword in keywords[:3]:
+        all_trends.extend(scrape_tiktok_trends(keyword))
+        all_trends.extend(scrape_instagram_trends(keyword))
+        time.sleep(0.3)
+    reddit = scrape_reddit_trends(keywords[0] if keywords else industry)
+    result = {
+        "keywords_analyzed": keywords[:3],
+        "tiktok_trends":     [t for t in all_trends if t.get("source") == "tiktok"][:5],
+        "instagram_trends":  [t for t in all_trends if t.get("source") == "instagram"][:4],
+        "reddit_signals":    reddit,
+        "top_hashtags":      list(set(h for t in all_trends for h in t.get("hashtags",[]) if len(h) > 3))[:10],
+    }
+    print(f"  ✓ Trends: {len(result['tiktok_trends'])} TikTok, {len(result['instagram_trends'])} Instagram, {len(result['reddit_signals'])} Reddit")
+    return result
+
+
+def format_trend_intelligence(trends):
+    if not trends: return ""
+    lines = ["=== TREND INTELLIGENCE — WHAT'S HOT RIGHT NOW ===\n"]
+    lines.append(f"Keywords: {', '.join(trends.get('keywords_analyzed',[]))}\n")
+    if trends.get("tiktok_trends"):
+        lines.append("TIKTOK TRENDING:")
+        for t in trends["tiktok_trends"][:4]:
+            views = f" [{t['views']}]" if t.get("views") else ""
+            lines.append(f"  • {t['title']}{views}")
+            if t.get("snippet"): lines.append(f"    {t['snippet'][:120]}")
+            tags = " ".join(t.get("hashtags",[])[:3])
+            if tags: lines.append(f"    Tags: {tags}")
+    if trends.get("instagram_trends"):
+        lines.append("\nINSTAGRAM TRENDING:")
+        for t in trends["instagram_trends"][:3]:
+            lines.append(f"  • {t['title']}")
+            if t.get("snippet"): lines.append(f"    {t['snippet'][:120]}")
+    if trends.get("reddit_signals"):
+        lines.append("\nCONSUMER DEMAND (Reddit):")
+        for t in trends["reddit_signals"][:3]:
+            lines.append(f"  • {t['title']}: {t['snippet'][:100]}")
+    if trends.get("top_hashtags"):
+        lines.append(f"\nTOP HASHTAGS: {' '.join(trends['top_hashtags'][:8])}")
+    return "\n".join(lines)
+
+
 def compute_complexity(website_pages, social_text, review_text, competitors):
     score = 0
     total = sum(len(v) for v in website_pages.values())
@@ -741,20 +1087,53 @@ def agent():
     prices = re.findall(r"\$[\d,]+(?:\.\d{2})?", website_flat)
     if prices: pricing_text += "\n[Website prices]: " + ", ".join(set(prices[:12]))
 
-    # Competitors
-    comp_results = search_web(f"{business_name} competitors alternatives {industry} {location}", 8)
-    comp_results += search_web(f"best {industry or business_name} {location}", 5)
+    # ── Trend Intelligence ────────────────────────────────────────────────────
+    trend_data = fetch_trend_intelligence(business_name, industry, location, website_pages)
+    trend_text = format_trend_intelligence(trend_data)
+    if trend_text:
+        pricing_text += "\n\n" + trend_text
+
+    # ── Competitor Discovery — Booking Platforms + Web Search ────────────────
+    # Booking platforms first — real pricing, ratings, services for local businesses
+    booking_cards = scrape_booking_competitors(business_name, industry, location, limit=5)
+    booking_intel = format_booking_intelligence(booking_cards)
+    if booking_intel:
+        pricing_text += "\n\n" + booking_intel
+
+    # Web search fallback for businesses not on booking platforms
+    comp_results = search_web(f"{industry or business_name} {location}", 6)
     seen_domains = set()
+    # Pre-seed seen domains from booking cards so we don't double-count
+    for card in booking_cards:
+        try:
+            seen_domains.add(urlparse(card["url"]).netloc.replace("www.",""))
+        except: pass
+
     competitors = []
-    SKIP = ["yelp.com","google.com","facebook.com","yellowpages.com","bbb.org","tripadvisor.com","reddit.com"]
+    # Add booking cards as structured competitors first
+    for card in booking_cards:
+        competitors.append({
+            "domain":   urlparse(card["url"]).netloc.replace("www.",""),
+            "title":    card["name"],
+            "body":     f"Platform: {card['platform']} | Rating: {card.get('rating','N/A')}★ | Avg price: ${card.get('avg_price','N/A')} | Services: {', '.join(card.get('services',[])[:4])}",
+            "platform": card["platform"],
+            "rating":   card.get("rating"),
+            "avg_price":card.get("avg_price"),
+            "pricing_position": card.get("pricing_position","unknown"),
+        })
+
+    # Fill remaining slots from web search
+    SKIP = ["yelp.com","google.com","facebook.com","yellowpages.com","bbb.org",
+            "tripadvisor.com","reddit.com","booksy.com","fresha.com",
+            "styleseat.com","vagaro.com","mindbody.io"]
     for r in comp_results:
+        if len(competitors) >= 8: break
         url = r.get("url","")
         try: domain = urlparse(url).netloc.replace("www.","")
         except: continue
         if not domain or domain in seen_domains or any(s in domain for s in SKIP): continue
         seen_domains.add(domain)
         competitors.append({"domain": domain, "title": r.get("title",""), "body": r.get("body","")[:300]})
-        if len(competitors) >= 5: break
 
     # ── Route ─────────────────────────────────────────────────────────────────
     complexity = compute_complexity(website_pages, social_text, review_text, competitors)
@@ -783,11 +1162,13 @@ def agent():
     routing_reasons = build_routing_reasons(website_pages, social_text, review_text, competitors, data_quality)
 
     agent_brain = {
-        "complexity_score":  complexity,
-        "pipeline_mode":     mode,
-        "routing_reasons":   routing_reasons,
-        "data_quality":      data_quality,
-        "access_type":       code_type,
+        "complexity_score":    complexity,
+        "pipeline_mode":       mode,
+        "routing_reasons":     routing_reasons,
+        "data_quality":        data_quality,
+        "access_type":         code_type,
+        "booking_competitors": booking_cards,
+        "trend_intelligence":  trend_data,
     }
 
     return jsonify({
