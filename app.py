@@ -748,6 +748,66 @@ def run_fast_pipeline(business_name, location, website_pages, social_text, socia
     return json.loads(r.choices[0].message.content.strip())
 
 
+def extract_enrichment(website_pages, social_links, website_url=""):
+    """
+    Extract contact enrichment signals from scraped website content.
+    Returns email, phone, booking platform, services found.
+    """
+    combined = " ".join(website_pages.values())
+    enrichment = {}
+
+    # Email extraction
+    emails = re.findall(
+        r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}',
+        combined
+    )
+    # Filter out common non-contact emails
+    skip_domains = ["sentry.io","example.com","gmail.com","wix.com","squarespace.com","wordpress.com"]
+    real_emails = [e for e in emails if not any(s in e for s in skip_domains)]
+    if real_emails:
+        enrichment["email"] = real_emails[0]
+
+    # Phone extraction
+    phones = re.findall(
+        r'(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}',
+        combined
+    )
+    if phones:
+        enrichment["phone"] = phones[0]
+
+    # Booking platform detection
+    BOOKING_SIGNALS = {
+        "acuity":     ["as.me", "acuityscheduling.com"],
+        "square":     ["squareup.com", "square.site"],
+        "calendly":   ["calendly.com"],
+        "booksy":     ["booksy.com"],
+        "fresha":     ["fresha.com"],
+        "vagaro":     ["vagaro.com"],
+        "mindbody":   ["mindbodyonline.com"],
+        "styleseat":  ["styleseat.com"],
+        "gloss_genius":["glossgenius.com"],
+    }
+    for platform, signals in BOOKING_SIGNALS.items():
+        if any(s in combined for s in signals):
+            enrichment["booking_platform"] = platform
+            # Try to extract the booking URL
+            for s in signals:
+                match = re.search(rf'https?://[^\s"\']*{re.escape(s)}[^\s"\']*', combined)
+                if match:
+                    enrichment["booking_url"] = match.group(0)[:200]
+            break
+
+    # Business address
+    address_m = re.search(
+        r'\d+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,?\s+(?:[A-Z][a-z]+\s+)*(?:NY|NYC|New York|Bronx|Brooklyn|Manhattan|Queens)',
+        combined
+    )
+    if address_m:
+        enrichment["address"] = address_m.group(0)
+
+    return enrichment
+
+
 # ─── HUBSPOT INTEGRATION ──────────────────────────────────────────────────────
 
 HUBSPOT_TOKEN = os.environ.get("HUBSPOT_TOKEN", "")
@@ -790,25 +850,30 @@ def hs_find_contact(email=None, domain=None):
         pass
     return None
 
-def hs_create_contact(business_name, email, website, instagram, location, niche):
+def hs_create_contact(business_name, email, website, instagram, location, niche, phone="", booking_platform=""):
     """Create a new HubSpot contact for the business."""
     props = {
         "company":   business_name,
+        "firstname": business_name,  # shows name instead of -- in HubSpot
         "website":   website or "",
         "city":      location or "",
     }
-    if email:   props["email"]   = email
-    if instagram: props["twitterhandle"] = instagram  # repurpose twitter field for IG handle
+    if email:            props["email"]        = email
+    if phone:            props["phone"]         = phone
+    if instagram:        props["twitterhandle"] = instagram
+    if booking_platform: props["jobtitle"]      = f"Uses {booking_platform.title()}"
     r = req.post(f"{HS_BASE}/crm/v3/objects/contacts",
         headers=hs_headers(), json={"properties": props}, timeout=10)
     return r.json().get("id")
 
-def hs_update_contact(contact_id, website, instagram, location):
+def hs_update_contact(contact_id, website, instagram, location, phone="", booking_platform=""):
     """Update existing contact with latest signals."""
     props = {}
-    if website:   props["website"]       = website
-    if location:  props["city"]          = location
-    if instagram: props["twitterhandle"] = instagram
+    if website:          props["website"]       = website
+    if location:         props["city"]          = location
+    if instagram:        props["twitterhandle"] = instagram
+    if phone:            props["phone"]         = phone
+    if booking_platform: props["jobtitle"]      = f"Uses {booking_platform.title()}"
     if props:
         req.patch(f"{HS_BASE}/crm/v3/objects/contacts/{contact_id}",
             headers=hs_headers(), json={"properties": props}, timeout=10)
@@ -848,34 +913,41 @@ def push_to_hubspot(report, website_pages, social_links):
     Silent fails — never blocks the report from returning to the user.
     """
     if not HUBSPOT_TOKEN:
-        return  # HubSpot not configured — skip silently
+        return
 
     business_name = report.get("company", "")
     if not business_name:
         return
 
-    # Extract signals
-    website    = next((v for k, v in (website_pages or {}).items() if "http" in v[:30]), "")
-    # Try to get actual URL from website_pages keys isn't ideal — get from report
+    # Run enrichment extraction
+    enrichment = extract_enrichment(website_pages, social_links)
+
     website    = report.get("website", "")
     instagram  = social_links.get("instagram", "")
     location   = report.get("location", "")
     niche      = report.get("industry", "")
-    email      = report.get("email", "")  # populated if agent found one on website
+    email      = enrichment.get("email", report.get("email", ""))
+    phone      = enrichment.get("phone", "")
+    booking_platform = enrichment.get("booking_platform", "")
+    booking_url      = enrichment.get("booking_url", "")
+    address          = enrichment.get("address", "")
 
-    overall    = report.get("overall_score", 50)
-    priority   = max(0, 100 - overall)   # lower score = higher priority lead
+    overall  = report.get("overall_score", 50)
+    priority = max(0, 100 - overall)
 
-    # Build outreach note
-    weaknesses  = report.get("weaknesses", [])
-    comp_sigs   = report.get("competitive_signals", {})
-    note_body   = f"""🤖 Yelhao Intelligence Report
+    weaknesses = report.get("weaknesses", [])
+    comp_sigs  = report.get("competitive_signals", {})
+
+    note_body = f"""🤖 Yelhao Intelligence Report
 
 Business: {business_name}
-Location: {location}
+Location: {location}{f' | {address}' if address else ''}
 Niche: {niche}
 Signal Score: {overall}/100
 Priority Score: {priority}/100
+{f'Booking Platform: {booking_platform.title()}' if booking_platform else ''}
+{f'Booking URL: {booking_url}' if booking_url else ''}
+{f'Phone: {phone}' if phone else ''}
 
 ──────────────────────────
 KEY INSIGHT:
@@ -902,22 +974,21 @@ Generated by Yelhao AI · yelhoa.netlify.app"""
     contact_id = hs_find_contact(email=email or None, domain=website or None)
 
     if contact_id:
-        # Update existing contact
-        hs_update_contact(contact_id, website, instagram, location)
+        hs_update_contact(contact_id, website, instagram, location, phone, booking_platform)
         print(f"  ✓ HubSpot: updated contact {contact_id} for {business_name}")
     else:
-        # Create new contact
-        contact_id = hs_create_contact(business_name, email, website, instagram, location, niche)
+        contact_id = hs_create_contact(
+            business_name, email, website, instagram,
+            location, niche, phone, booking_platform
+        )
         if not contact_id:
             print(f"  ⚠ HubSpot: failed to create contact for {business_name}")
             return
         print(f"  ✓ HubSpot: created contact {contact_id} for {business_name}")
 
-    # Create deal
     deal_id = hs_create_deal(contact_id, business_name, priority)
     print(f"  ✓ HubSpot: deal {deal_id} created (priority {priority})")
 
-    # Log AI-generated note
     hs_create_note(contact_id, note_body)
     print(f"  ✓ HubSpot: note logged for {business_name}")
 
