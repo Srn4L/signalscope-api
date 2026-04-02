@@ -517,6 +517,7 @@ def scrape_tiktok_trends(keyword):
                 "title": title[:80], "snippet": body[:200],
                 "views": views_m.group(0) if views_m else None,
                 "hashtags": hashtags[:4], "source": "tiktok", "keyword": keyword,
+                "url": r.get("url", ""),
             })
         if len(trends) >= 3: break
     return trends[:4]
@@ -532,6 +533,7 @@ def scrape_instagram_trends(keyword):
         trends.append({
             "title": r.get("title","")[:80], "snippet": body[:200],
             "hashtags": hashtags[:4], "source": "instagram", "keyword": keyword,
+            "url": r.get("url", ""),
         })
     return trends[:3]
 
@@ -542,7 +544,10 @@ def scrape_reddit_trends(keyword):
     for r in results:
         body = r.get("body","")
         if body and len(body) > 50:
-            trends.append({"title": r.get("title","")[:80], "snippet": body[:200], "source": "reddit"})
+            trends.append({
+                "title": r.get("title","")[:80], "snippet": body[:200],
+                "source": "reddit", "url": r.get("url", ""),
+            })
     return trends[:3]
 
 
