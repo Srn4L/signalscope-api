@@ -597,19 +597,33 @@ def format_trend_intelligence(trends):
     return "\n".join(lines)
 
 
-def compute_complexity(website_pages, social_text, review_text, competitors):
+def compute_complexity(website_pages, social_text, review_text, competitors, social_links=None):
     score = 0
     total = sum(len(v) for v in website_pages.values())
-    if total > 3000: score += 2
-    elif total > 1000: score += 1
-    _soc = social_links if social_links else social_text
-    if len(_soc) >= 2: score += 2
-    elif len(_soc) >= 1: score += 1
-    if len(review_text) > 500: score += 2
-    elif len(review_text) > 100: score += 1
-    if len(competitors) >= 3: score += 2
-    elif len(competitors) >= 1: score += 1
-    if len(website_pages) >= 3: score += 1
+    if total > 3000:
+        score += 2
+    elif total > 1000:
+        score += 1
+
+    social_basis = social_links if social_links else social_text
+    if len(social_basis) >= 2:
+        score += 2
+    elif len(social_basis) >= 1:
+        score += 1
+
+    if len(review_text) > 500:
+        score += 2
+    elif len(review_text) > 100:
+        score += 1
+
+    if len(competitors) >= 3:
+        score += 2
+    elif len(competitors) >= 1:
+        score += 1
+
+    if len(website_pages) >= 3:
+        score += 1
+
     return min(score, 10)
 
 def route_task(complexity):
@@ -636,31 +650,32 @@ def build_routing_reasons(website_pages, social_text, review_text, competitors, 
         reasons.append(f"Pricing detected: {', '.join(set(prices[:4]))}")
     return reasons
 
-def build_data_quality(website_pages, social_text, review_text, competitors):
-    web_pct = min(100, len(website_pages) * 25)
-    web_level = "high" if web_pct >= 75 else "medium" if web_pct >= 40 else "low"
+def build_routing_reasons(website_pages, social_text, review_text, competitors, data_quality, social_links=None):
+    reasons = []
+    reasons.append(f"{len(website_pages)} website page{'s' if len(website_pages) != 1 else ''} scraped")
 
-    soc_pct = min(100, len(social_text) * 35)
-    soc_level = "high" if soc_pct >= 70 else "medium" if soc_pct >= 35 else "low"
+    social_basis = social_links if social_links else social_text
+    if social_basis:
+        reasons.append(
+            f"{len(social_basis)} social platform{'s' if len(social_basis) != 1 else ''} detected: {', '.join(social_basis.keys())}"
+        )
+    else:
+        reasons.append("No accessible social pages found")
 
-    rev_len = len(review_text)
-    rev_pct = min(100, int(rev_len / 30))
-    rev_level = "high" if rev_pct >= 70 else "medium" if rev_pct >= 35 else "low"
+    if competitors:
+        reasons.append(f"{len(competitors)} competitors identified")
+
+    review_chars = len(review_text)
+    if review_chars > 500:
+        reasons.append(f"Strong review data ({review_chars} chars)")
+    elif review_chars > 0:
+        reasons.append(f"Limited review data ({review_chars} chars)")
 
     prices = re.findall(r"\$[\d,]+", " ".join(website_pages.values()))
-    pr_pct = min(100, len(prices) * 20 + 20)
-    pr_level = "high" if pr_pct >= 70 else "medium" if pr_pct >= 40 else "low"
+    if prices:
+        reasons.append(f"Pricing detected: {', '.join(set(prices[:4]))}")
 
-    comp_pct = min(100, len(competitors) * 20)
-    comp_level = "high" if comp_pct >= 60 else "medium" if comp_pct >= 30 else "low"
-
-    return {
-        "website":     {"pct": web_pct,  "level": web_level,  "detail": f"{len(website_pages)} pages scraped"},
-        "social":      {"pct": soc_pct,  "level": soc_level,  "detail": f"{', '.join(social_text.keys()) or 'none detected'}"},
-        "reviews":     {"pct": rev_pct,  "level": rev_level,  "detail": f"{rev_len} chars"},
-        "pricing":     {"pct": pr_pct,   "level": pr_level,   "detail": f"{len(prices)} price signals"},
-        "competitors": {"pct": comp_pct, "level": comp_level, "detail": f"{len(competitors)} found"},
-    }
+    return reasons
 
 def run_fast_pipeline(business_name, location, website_pages, social_text, social_links=None):
     """
@@ -764,32 +779,42 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
             social_links=social_links,
         )
         report["company"] = business_name
-        report["_pipeline_mode"]    = mode
-        report["_complexity_score"] = compute_complexity(website_pages, social_text, review_text, competitors)
+        report["_pipeline_mode"] = mode
+        report["_complexity_score"] = compute_complexity(
+            website_pages, social_text, review_text, competitors, social_links=social_links
+        )
 
-        data_quality    = build_data_quality(website_pages, social_text, review_text, competitors)
-        routing_reasons = build_routing_reasons(website_pages, social_text, review_text, competitors, data_quality)
+        data_quality = build_data_quality(
+            website_pages, social_text, review_text, competitors, social_links=social_links
+        )
+        routing_reasons = build_routing_reasons(
+            website_pages, social_text, review_text, competitors, data_quality, social_links=social_links
+        )
 
         agent_brain = {
-            "complexity_score":    compute_complexity(website_pages, social_text, review_text, competitors),
-            "pipeline_mode":       mode,
-            "routing_reasons":     routing_reasons,
-            "data_quality":        data_quality,
+            "complexity_score": compute_complexity(
+                website_pages, social_text, review_text, competitors, social_links=social_links
+            ),
+            "pipeline_mode": mode,
+            "routing_reasons": routing_reasons,
+            "data_quality": data_quality,
             "booking_competitors": booking_cards,
-            "trend_intelligence":  trend_data,
+            "trend_intelligence": trend_data,
         }
 
         response_data = {"report": report, "agent_brain": agent_brain}
         set_cache(ck, response_data)
-        if booking_cards: set_cache(ck + '_booking', booking_cards)
-        if trend_data:    set_cache(ck + '_trends',  trend_data)
+        if booking_cards:
+            set_cache(ck + "_booking", booking_cards)
+        if trend_data:
+            set_cache(ck + "_trends", trend_data)
+
         JOBS[job_id] = {"status": "done", "result": response_data, "ts": time.time()}
         print(f"  ✓ Deep job {job_id} complete")
 
     except Exception as e:
         print(f"  ✗ Deep job {job_id} failed: {e}")
         JOBS[job_id] = {"status": "error", "error": str(e), "ts": time.time()}
-
 
 def run_full_pipeline(business_name, location, website_pages, social_text,
                       review_text, pricing_text, competitors, mode,
