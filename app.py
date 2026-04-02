@@ -429,8 +429,8 @@ def format_booking_intelligence(cards):
 
     lines = ["=== BOOKING PLATFORM COMPETITOR INTELLIGENCE ===\n"]
     for i, c in enumerate(cards, 1):
-        lines.append(f"Competitor {i}: {c['name']} [{c['platform'].upper()}]")
-        lines.append(f"  URL: {c['url']}")
+        lines.append(f"Competitor {i}: {c.get('name', c.get('title','Unknown'))} [{c.get('platform','').upper()}]")
+        lines.append(f"  URL: {c.get('url','')}")
         if c.get("rating"):
             rev = f" ({c['review_count']} reviews)" if c.get("review_count") else ""
             lines.append(f"  Rating: {c['rating']}★{rev}")
@@ -657,14 +657,21 @@ def run_fast_pipeline(business_name, location, website_pages, social_text):
         "website_pages": {k: v[:1200] for k, v in list(website_pages.items())[:2]},
         "social_text":   {k: v[:800]  for k, v in list(social_text.items())[:2]},
     }
+    platform_hint = f"Detected social platforms: {list(social_text.keys())}" if social_text else "No social profiles detected"
     prompt = textwrap.dedent(f"""
-    You are a marketing analyst. Generate a SignalScope report for {business_name} ({location}).
-    Use the data provided. Extract every signal you can — brand voice, pricing, services, platforms.
-    Be specific. Even if data is limited, give real observations not generic advice.
+    You are a marketing analyst for small businesses. Be specific — never generic.
+
+    BUSINESS: {business_name} ({location})
+    {platform_hint}
 
     DATA: {json.dumps(raw)[:4000]}
 
-    Return ONLY valid JSON — fill every field with real analysis:
+    STRICT RULES:
+    - Reference actual data found — prices, platforms, services, review sentiment
+    - Never say "post more consistently" or "expand platform presence" without specifics
+    - If pricing data exists, compare it to market norms
+    - If social platforms are missing, name which ones and why they matter for this niche
+    - Set signal_confidence to "Low" if data was thin — be honest
     {{
       "company": "{business_name}",
       "industry": "string",
@@ -726,6 +733,8 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
             website_pages, social_text,
             review_text, pricing_text,
             competitors, mode,
+            booking_cards=booking_cards,
+            trend_data=trend_data,
         )
         report["company"] = business_name
         report["_pipeline_mode"]    = mode
@@ -756,7 +765,8 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
 
 
 def run_full_pipeline(business_name, location, website_pages, social_text,
-                      review_text, pricing_text, competitors, mode):
+                      review_text, pricing_text, competitors, mode,
+                      booking_cards=None, trend_data=None):
     """
     Three-stage multi-model pipeline:
       multi_model  → GPT extract → Claude analyze → GPT validate+format
@@ -785,7 +795,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         Website: {json.dumps(website_pages)[:3000]}
         Social: {json.dumps(social_text)[:2000]}
         Reviews: {review_text[:1500]}
-        Pricing: {pricing_text[:1000]}
+        Pricing: {pricing_text[:4000]}
         Competitors: {json.dumps(competitors)[:1500]}
 
         Extract and return:
@@ -844,13 +854,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         structured = json.loads(r1.choices[0].message.content.strip())
 
         # Stage 2 — Claude: deep strategic analysis
-        # Build booking + trend context to inject directly
-        booking_context = format_booking_intelligence(competitors[:5]) if competitors else ""
-        trend_context   = format_trend_intelligence(
-            json.loads(pricing_text.split("=== TREND INTELLIGENCE")[1].split("===")[0].strip())
-            if "=== TREND INTELLIGENCE" in pricing_text else None
-        ) if "=== TREND INTELLIGENCE" in pricing_text else ""
-
+        # pricing_text already contains formatted booking + trend intelligence
         claude_prompt = textwrap.dedent(f"""
         You are a senior growth strategist for small businesses. You have access to REAL market data.
 
@@ -859,16 +863,26 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         EXTRACTED SIGNALS:
         {json.dumps(structured, indent=2)}
 
-        COMPETITOR & BOOKING INTELLIGENCE (REAL DATA — use specific numbers):
-        {pricing_text[:2000]}
+        STRUCTURED BOOKING COMPETITOR DATA (real pricing + ratings from Booksy/Fresha/Yelp/StyleSeat):
+        {json.dumps(booking_cards[:3], indent=2)}
+
+        STRUCTURED TREND DATA (live TikTok/Instagram/Reddit signals):
+        {json.dumps(trend_data, indent=2)[:1500] if trend_data else "No trend data available"}
+
+        FULL INTELLIGENCE CONTEXT (reviews, pricing signals, web mentions):
+        {pricing_text[:6000]}
 
         RULES — STRICT:
         - NEVER give generic advice like "post more consistently" or "expand platform presence"
         - EVERY insight must reference specific data: competitor prices, ratings, trend names, or platform signals
-        - If competitors charge $X avg, say so and compare to this business
-        - If a trend is detected, name it specifically and say how this business can use it
-        - If review data exists, cite it directly
+        - If booking competitors have avg ratings, compare this business to them explicitly
+        - If competitor pricing exists, state the market average and how this business compares
+        - If a trend is detected, name it specifically and say how this business can capitalize on it
+        - If review data exists, cite specific themes directly
         - Scores must reflect actual data quality — be honest, not generous
+        - ALWAYS compute a market baseline if competitor data is available:
+          state the avg price, avg rating, and how this business compares explicitly
+          e.g. "Market avg: $92, 4.6★ — this business shows no pricing → conversion gap"
 
         Produce strategic analysis covering:
         1. OVERALL SIGNAL SCORE (0-100) — honest
@@ -953,7 +967,9 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         - Generate exactly 4 experiments
         - posting_mix percentages must sum to 100
         - ai_methodology_note must mention the 3-stage pipeline
-        - Replace unsupported claims with "Signal not detected — insufficient data"
+        - Preserve all specific insights from Claude if plausibly supported by the data
+        - Only remove claims that directly contradict extracted signal data
+        - Keep all competitor pricing references, trend names, and specific numbers
         - Be honest about data gaps in coverage_notes
         """)
 
@@ -1143,7 +1159,7 @@ def agent():
                 if len(text) > 200:
                     return platform, text
             return platform, None
-        with _SPE(max_workers=4) as ex:
+        with _SPE(max_workers=3) as ex:
             for platform, text in ex.map(_fetch_social, social_links.items()):
                 if text:
                     social_text[platform] = text
@@ -1183,7 +1199,7 @@ def agent():
                 trend_data = cached_trends or fetch_trend_intelligence(business_name, industry, location, pages)
             except: trend_data = None
             try:
-                booking_cards = cached_booking or scrape_booking_competitors(business_name, industry, location, 2)
+                booking_cards = cached_booking or scrape_booking_competitors(business_name, industry, location, 3)
             except: booking_cards = []
 
             # Layer 2+3 social
@@ -1238,15 +1254,17 @@ def agent():
 
             # Add pre-collected trend + booking intelligence
             trend_text = format_trend_intelligence(trend_data)
-            if trend_text: pricing_text += "\n\n" + trend_text
             booking_intel = format_booking_intelligence(booking_cards)
-            if booking_intel: pricing_text += "\n\n" + booking_intel
+            # Put intelligence FIRST so it's not truncated
+            pricing_text = "\n\n".join(filter(None, [booking_intel, trend_text, pricing_text]))
 
             # Competitors
             comp_results = search_web(f"{industry or business_name} {location}", 5)
             seen = set(urlparse(c.get("url","")).netloc.replace("www.","") for c in booking_cards if c.get("url"))
-            competitors = [{"domain": urlparse(c["url"]).netloc.replace("www.",""), "title": c["name"],
-                           "body": f"Platform: {c['platform']} | Rating: {c.get('rating','N/A')}★ | ${c.get('avg_price','N/A')}"} for c in booking_cards]
+            competitors = [{"domain": urlparse(c.get("url","")).netloc.replace("www.",""), 
+                            "title": c.get("name", c.get("title", "")),
+                            "body": f"Platform: {c.get('platform','')} | Rating: {c.get('rating','N/A')}★ | ${c.get('avg_price','N/A')}"} 
+                           for c in booking_cards if c.get("url")]
             SKIP = ["yelp.com","google.com","facebook.com","yellowpages.com","bbb.org","tripadvisor.com",
                    "reddit.com","booksy.com","fresha.com","styleseat.com","vagaro.com","mindbody.io"]
             for r in comp_results:
