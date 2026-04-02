@@ -748,6 +748,180 @@ def run_fast_pipeline(business_name, location, website_pages, social_text, socia
     return json.loads(r.choices[0].message.content.strip())
 
 
+# ─── HUBSPOT INTEGRATION ──────────────────────────────────────────────────────
+
+HUBSPOT_TOKEN = os.environ.get("HUBSPOT_TOKEN", "")
+HS_BASE       = "https://api.hubapi.com"
+
+def hs_headers():
+    return {
+        "Authorization": f"Bearer {HUBSPOT_TOKEN}",
+        "Content-Type":  "application/json",
+    }
+
+def hs_find_contact(email=None, domain=None):
+    """Find contact by email first, fall back to website domain."""
+    if not HUBSPOT_TOKEN:
+        return None
+    try:
+        if email:
+            r = req.post(f"{HS_BASE}/crm/v3/objects/contacts/search",
+                headers=hs_headers(), json={
+                    "filterGroups": [{"filters": [
+                        {"propertyName": "email", "operator": "EQ", "value": email}
+                    ]}]
+                }, timeout=10)
+            results = r.json().get("results", [])
+            if results:
+                return results[0]["id"]
+        if domain:
+            # Search by website domain
+            clean = domain.replace("https://","").replace("http://","").replace("www.","").rstrip("/").split("/")[0]
+            r = req.post(f"{HS_BASE}/crm/v3/objects/contacts/search",
+                headers=hs_headers(), json={
+                    "filterGroups": [{"filters": [
+                        {"propertyName": "website", "operator": "CONTAINS_TOKEN", "value": clean}
+                    ]}]
+                }, timeout=10)
+            results = r.json().get("results", [])
+            if results:
+                return results[0]["id"]
+    except Exception:
+        pass
+    return None
+
+def hs_create_contact(business_name, email, website, instagram, location, niche):
+    """Create a new HubSpot contact for the business."""
+    props = {
+        "company":   business_name,
+        "website":   website or "",
+        "city":      location or "",
+    }
+    if email:   props["email"]   = email
+    if instagram: props["twitterhandle"] = instagram  # repurpose twitter field for IG handle
+    r = req.post(f"{HS_BASE}/crm/v3/objects/contacts",
+        headers=hs_headers(), json={"properties": props}, timeout=10)
+    return r.json().get("id")
+
+def hs_update_contact(contact_id, website, instagram, location):
+    """Update existing contact with latest signals."""
+    props = {}
+    if website:   props["website"]       = website
+    if location:  props["city"]          = location
+    if instagram: props["twitterhandle"] = instagram
+    if props:
+        req.patch(f"{HS_BASE}/crm/v3/objects/contacts/{contact_id}",
+            headers=hs_headers(), json={"properties": props}, timeout=10)
+
+def hs_create_deal(contact_id, business_name, priority_score):
+    """Create a deal linked to the contact."""
+    r = req.post(f"{HS_BASE}/crm/v3/objects/deals",
+        headers=hs_headers(), json={
+            "properties": {
+                "dealname":  f"{business_name} — Yelhao Lead",
+                "pipeline":  "default",
+                "dealstage": "appointmentscheduled",
+                "amount":    "",
+            },
+            "associations": [{
+                "to":    {"id": contact_id},
+                "types": [{"associationCategory": "HUBSPOT_DEFINED", "associationTypeId": 3}]
+            }]
+        }, timeout=10)
+    return r.json().get("id")
+
+def hs_create_note(contact_id, body):
+    """Attach a note to a contact using the modern CRM v3 Notes API."""
+    req.post(f"{HS_BASE}/crm/v3/objects/notes",
+        headers=hs_headers(), json={
+            "properties": {"hs_note_body": body},
+            "associations": [{
+                "to":    {"id": contact_id},
+                "types": [{"associationCategory": "HUBSPOT_DEFINED", "associationTypeId": 202}]
+            }]
+        }, timeout=10)
+
+def push_to_hubspot(report, website_pages, social_links):
+    """
+    Event-driven CRM sync — triggered automatically on deep job completion.
+    Creates or updates contact, creates deal, logs AI-generated note.
+    Silent fails — never blocks the report from returning to the user.
+    """
+    if not HUBSPOT_TOKEN:
+        return  # HubSpot not configured — skip silently
+
+    business_name = report.get("company", "")
+    if not business_name:
+        return
+
+    # Extract signals
+    website    = next((v for k, v in (website_pages or {}).items() if "http" in v[:30]), "")
+    # Try to get actual URL from website_pages keys isn't ideal — get from report
+    website    = report.get("website", "")
+    instagram  = social_links.get("instagram", "")
+    location   = report.get("location", "")
+    niche      = report.get("industry", "")
+    email      = report.get("email", "")  # populated if agent found one on website
+
+    overall    = report.get("overall_score", 50)
+    priority   = max(0, 100 - overall)   # lower score = higher priority lead
+
+    # Build outreach note
+    weaknesses  = report.get("weaknesses", [])
+    comp_sigs   = report.get("competitive_signals", {})
+    note_body   = f"""🤖 Yelhao Intelligence Report
+
+Business: {business_name}
+Location: {location}
+Niche: {niche}
+Signal Score: {overall}/100
+Priority Score: {priority}/100
+
+──────────────────────────
+KEY INSIGHT:
+{report.get("key_insight", "N/A")}
+
+TOP WEAKNESS:
+{weaknesses[0] if weaknesses else "N/A"}
+
+COMPETITOR GAP:
+{comp_sigs.get("market_gaps", "N/A")}
+
+PRICING POSITION:
+{comp_sigs.get("pricing_position", "unknown")} — {comp_sigs.get("pricing_notes", "")}
+
+OUTREACH ANGLE:
+{report.get("cover_letter_snippet", "N/A")}
+
+PLATFORMS DETECTED:
+{", ".join(social_links.keys()) or "None detected"}
+──────────────────────────
+Generated by Yelhao AI · yelhoa.netlify.app"""
+
+    # Dedup: find by email → fall back to domain
+    contact_id = hs_find_contact(email=email or None, domain=website or None)
+
+    if contact_id:
+        # Update existing contact
+        hs_update_contact(contact_id, website, instagram, location)
+        print(f"  ✓ HubSpot: updated contact {contact_id} for {business_name}")
+    else:
+        # Create new contact
+        contact_id = hs_create_contact(business_name, email, website, instagram, location, niche)
+        if not contact_id:
+            print(f"  ⚠ HubSpot: failed to create contact for {business_name}")
+            return
+        print(f"  ✓ HubSpot: created contact {contact_id} for {business_name}")
+
+    # Create deal
+    deal_id = hs_create_deal(contact_id, business_name, priority)
+    print(f"  ✓ HubSpot: deal {deal_id} created (priority {priority})")
+
+    # Log AI-generated note
+    hs_create_note(contact_id, note_body)
+    print(f"  ✓ HubSpot: note logged for {business_name}")
+
+
 def run_deep_job(job_id, business_name, location, website_pages, social_text,
                  review_text, pricing_text, competitors, mode,
                  booking_cards, trend_data, ck, social_links=None):
@@ -788,6 +962,12 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
         if trend_data:    set_cache(ck + '_trends',  trend_data)
         JOBS[job_id] = {"status": "done", "result": response_data, "ts": time.time()}
         print(f"  ✓ Deep job {job_id} complete")
+
+        # ── Push to HubSpot (silent fail — never block the report) ────────────
+        try:
+            push_to_hubspot(report, website_pages, social_links or {})
+        except Exception as hs_err:
+            print(f"  ⚠ HubSpot sync failed (non-critical): {hs_err}")
 
     except Exception as e:
         print(f"  ✗ Deep job {job_id} failed: {e}")
