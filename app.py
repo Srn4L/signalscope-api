@@ -641,6 +641,7 @@ def build_data_quality(website_pages, social_text, review_text, competitors, soc
         "competitors": len(competitors),
     }
 
+
 def build_routing_reasons(website_pages, social_text, review_text, competitors, data_quality, social_links=None):
     reasons = []
     reasons.append(f"{len(website_pages)} website page{'s' if len(website_pages) != 1 else ''} scraped")
@@ -1346,7 +1347,7 @@ def agent():
                 seen.add(domain)
                 competitors.append({"domain": domain, "title": r.get("title",""), "body": r.get("body","")[:200]})
 
-            complexity = compute_complexity(pages, local_social, review_text, competitors)
+            complexity = compute_complexity(pages, local_social, review_text, competitors, social_links=social_links)
             mode = route_task(complexity)
 
             run_deep_job(job_id, business_name, location, pages, local_social,
@@ -1401,4 +1402,4 @@ def health():
 
 
 if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000
+    app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
