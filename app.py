@@ -631,24 +631,15 @@ def route_task(complexity):
     elif complexity >= 3: return "claude_only"
     return "gpt_only"
 
-def build_routing_reasons(website_pages, social_text, review_text, competitors, data_quality):
-    reasons = []
-    reasons.append(f"{len(website_pages)} website page{'s' if len(website_pages) != 1 else ''} scraped")
-    if social_text:
-        reasons.append(f"{len(social_text)} social platform{'s' if len(social_text) != 1 else ''} detected: {', '.join(social_text.keys())}")
-    else:
-        reasons.append("No accessible social pages found")
-    if competitors:
-        reasons.append(f"{len(competitors)} competitors identified")
-    review_chars = len(review_text)
-    if review_chars > 500:
-        reasons.append(f"Strong review data ({review_chars} chars)")
-    elif review_chars > 0:
-        reasons.append(f"Limited review data ({review_chars} chars)")
-    prices = re.findall(r"\$[\d,]+", " ".join(website_pages.values()))
-    if prices:
-        reasons.append(f"Pricing detected: {', '.join(set(prices[:4]))}")
-    return reasons
+def build_data_quality(website_pages, social_text, review_text, competitors, social_links=None):
+    social_basis = social_links if social_links else social_text
+    return {
+        "website": len(website_pages),
+        "social_detected": list(social_basis.keys()),
+        "social_content": list(social_text.keys()),
+        "reviews_len": len(review_text),
+        "competitors": len(competitors),
+    }
 
 def build_routing_reasons(website_pages, social_text, review_text, competitors, data_quality, social_links=None):
     reasons = []
@@ -1372,7 +1363,7 @@ def agent():
         "complexity_score": 0,
         "pipeline_mode":    "fast",
         "routing_reasons":  [f"Fast analysis complete — enhancing with full intelligence (job: {job_id})"],
-        "data_quality":     build_data_quality(website_pages, social_text, "", []),
+        "data_quality":     build_data_quality(website_pages, social_text, "", [], social_links=social_links),
         "booking_competitors": [],
         "trend_intelligence":  None,
     }
@@ -1410,4 +1401,4 @@ def health():
 
 
 if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000
