@@ -87,7 +87,7 @@ from bs4 import BeautifulSoup
 from openai import OpenAI
 from anthropic import Anthropic
 from ddgs import DDGS
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 
 app = Flask(__name__)
 CORS(app)
@@ -183,7 +183,7 @@ def safe_get(url, timeout=10):
             proxy_url = (
                 f"http://api.scraperapi.com"
                 f"?api_key={SCRAPER_API_KEY}"
-                f"&url={req.utils.quote(url, safe='')}"
+                f"&url={quote(url, safe='')}"
                 f"&render=false"  # set True for JS-heavy sites (costs 5 credits)
             )
             r = req.get(proxy_url, timeout=timeout)
@@ -595,7 +595,7 @@ def format_trend_intelligence(trends):
     return "\n".join(lines)
 
 
-def compute_complexity(website_pages, social_text, review_text, competitors):
+def compute_complexity(website_pages, social_text, review_text, competitors, social_links=None):
     score = 0
     total = sum(len(v) for v in website_pages.values())
     if total > 3000: score += 2
@@ -763,13 +763,13 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
         )
         report["company"] = business_name
         report["_pipeline_mode"]    = mode
-        report["_complexity_score"] = compute_complexity(website_pages, social_text, review_text, competitors)
+        report["_complexity_score"] = compute_complexity(website_pages, social_text, review_text, competitors, social_links)
 
         data_quality    = build_data_quality(website_pages, social_text, review_text, competitors)
         routing_reasons = build_routing_reasons(website_pages, social_text, review_text, competitors, data_quality)
 
         agent_brain = {
-            "complexity_score":    compute_complexity(website_pages, social_text, review_text, competitors),
+            "complexity_score":    compute_complexity(website_pages, social_text, review_text, competitors, social_links),
             "pipeline_mode":       mode,
             "routing_reasons":     routing_reasons,
             "data_quality":        data_quality,
@@ -1239,6 +1239,7 @@ def agent():
         try:
             pages        = dict(website_pages)
             local_social = dict(social_text)  # clone — never mutate shared state across threads
+            _social_links = social_links      # capture explicitly for closure safety
 
             # Collect trends + booking — use cache if available
             cached_trends  = get_cached(ck + '_trends')
@@ -1251,7 +1252,7 @@ def agent():
             except: booking_cards = []
 
             # Layer 2+3 social — DuckDuckGo cached posts + metadata
-            for platform, url in social_links.items():
+            for platform, url in _social_links.items():
                 if platform in local_social and len(local_social.get(platform,"")) > 200:
                     continue
                 handle = url.rstrip("/").split("/")[-1].lstrip("@")
@@ -1328,12 +1329,12 @@ def agent():
                 seen.add(domain)
                 competitors.append({"domain": domain, "title": r.get("title",""), "body": r.get("body","")[:200]})
 
-            complexity = compute_complexity(pages, local_social, review_text, competitors)
+            complexity = compute_complexity(pages, local_social, review_text, competitors, _social_links)
             mode = route_task(complexity)
 
             run_deep_job(job_id, business_name, location, pages, local_social,
                         review_text, pricing_text, competitors, mode,
-                        booking_cards, trend_data, ck, social_links)
+                        booking_cards, trend_data, ck, _social_links)
         except Exception as e:
             JOBS[job_id] = {"status": "error", "error": str(e), "ts": time.time()}
             print(f"  ✗ Deep work failed: {e}")
