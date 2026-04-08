@@ -1091,6 +1091,7 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
         except Exception as hs_err:
             print(f"  ⚠ HubSpot sync failed (non-critical): {hs_err}")
         # ── Push to Airtable ──────────────────────────────────────────────
+        print("  → Attempting Airtable push...")
         try:
             enrichment = extract_enrichment(website_pages, social_links or {})
             push_to_airtable(report, enrichment, website_url=report.get("website",""), location=report.get("location",""))
