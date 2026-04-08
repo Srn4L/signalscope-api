@@ -998,7 +998,7 @@ AIRTABLE_TOKEN    = os.environ.get("AIRTABLE_TOKEN", "")
 AIRTABLE_BASE_ID  = os.environ.get("AIRTABLE_BASE_ID", "")
 AIRTABLE_TABLE_ID = os.environ.get("AIRTABLE_TABLE_ID", "")
 
-def push_to_airtable(report, enrichment):
+def push_to_airtable(report, enrichment, website_url="", location=""):
     """
     Creates a new row in Airtable Leads table after deep analysis completes.
     Silent fail — never blocks the report from returning to the user.
@@ -1018,9 +1018,9 @@ def push_to_airtable(report, enrichment):
 
     fields = {
         "Business Name":    report.get("company", ""),
-        "Website":          report.get("website", ""),
-        "Industry":         report.get("industry", ""),
-        "Location":         report.get("location", ""),
+        "Website":   website_url,
+        "Industry":  report.get("industry", ""),
+        "Location":  location,,
         "Overall Score":    report.get("overall_score", 0),
         "Pipeline Stage":   "New",
         "Owner Email":      enrichment.get("email", ""),
@@ -1094,7 +1094,7 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
   # ── Push to Airtable ──────────────────────────────────────────────
         try:
             enrichment = extract_enrichment(website_pages, social_links or {})
-            push_to_airtable(report, enrichment)
+            push_to_airtable(report, enrichment, website_url=report.get("website",""), location=report.get("location",""))
         except Exception as at_err:
             print(f"  ⚠ Airtable sync failed (non-critical): {at_err}")
     except Exception as e:
