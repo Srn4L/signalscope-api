@@ -1030,7 +1030,7 @@ def push_to_airtable(report, enrichment, website_url="", location=""):
 
     try:
         r = req.post(
-            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_ID}",
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{Leads}",
             headers={
                 "Authorization": f"Bearer {AIRTABLE_TOKEN}",
                 "Content-Type":  "application/json",
