@@ -1020,7 +1020,7 @@ def push_to_airtable(report, enrichment, website_url="", location=""):
         "Website":   website_url,
         "Industry":  report.get("industry", ""),
         "Location":  location,
-        "Overall Score":    report.get("overall_score", 0),
+        "Score":    report.get("overall_score", 0),
         "Pipeline Stage":   "New",
         "Owner Email":      enrichment.get("email", ""),
         "Key Weakness":     weaknesses[0] if weaknesses else "",
