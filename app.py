@@ -1036,12 +1036,12 @@ def push_to_airtable(report, enrichment, website_url="", location=""):
                 "Content-Type":  "application/json",
             },
             json={"fields": fields},
-            timeout=10,
+            timeout=5,
         )
         if r.status_code == 200:
-            print(f"  ✓ Airtable: row created for {report.get('company')}")
+            print(f"  ✓ Airtable: row created for {report.get('company')}", flush=True)
         else:
-            print(f"  ⚠ Airtable: failed {r.status_code} — {r.text[:100]}")
+            print(f"  ⚠ Airtable: failed {r.status_code} — {r.text[:100]}", flush=True)
     except Exception as e:
         print(f"  ⚠ Airtable: exception — {e}")
 def run_deep_job(job_id, business_name, location, website_pages, social_text,
