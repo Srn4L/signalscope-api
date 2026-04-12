@@ -19,6 +19,7 @@ import json
 import time
 import uuid
 import textwrap
+import sys
 from threading import Thread
 from collections import defaultdict
 from flask import Flask, request, jsonify
@@ -1694,6 +1695,146 @@ def validate():
 def health():
     return jsonify({"status": "ok", "agent_version": "2.0"})
 
+# ─── SAAS RECOMMENDER ─────────────────────────────────────────────────────────
+
+def recommend_saas(report):
+    text = " ".join([
+        report.get("key_insight", ""),
+        " ".join(report.get("weaknesses", [])),
+    ]).lower()
+    recommendations = []
+    def has(*keywords):
+        return any(k in text for k in keywords)
+    if has("crm", "follow up", "lead", "contact", "manual", "no system"):
+        recommendations.append({"tool": "ActiveCampaign", "reason": "Missing CRM and automated follow-up", "affiliate": "activecampaign.com"})
+    if has("website", "no site", "outdated", "poor design", "mobile"):
+        recommendations.append({"tool": "Webflow", "reason": "Weak or outdated website", "affiliate": "webflow.com"})
+    if has("seo", "search", "google", "visibility", "ranking"):
+        recommendations.append({"tool": "Semrush", "reason": "Low search visibility", "affiliate": "semrush.com"})
+    if has("booking", "appointments", "scheduling"):
+        recommendations.append({"tool": "GlossGenius", "reason": "Improve booking and client management", "affiliate": "glossgenius.com"})
+    if has("social", "instagram", "tiktok", "content", "posting"):
+        recommendations.append({"tool": "Later", "reason": "Social media scheduling and consistency", "affiliate": "later.com"})
+    seen = set()
+    final = []
+    for r in recommendations:
+        if r["tool"] not in seen:
+            final.append(r)
+            seen.add(r["tool"])
+    return final[:2]
+
+
+# ─── /prospect ENDPOINT ───────────────────────────────────────────────────────
+
+@app.route('/prospect', methods=['POST'])
+def prospect():
+    code_type = get_code_type(request)
+    if code_type is None:
+        return jsonify({"error": "Access denied."}), 401
+
+    init_clients()
+    if not gpt_client:
+        return jsonify({"error": "API keys not configured"}), 500
+
+    body = request.get_json(force=True, silent=True) or {}
+    niche    = body.get('niche', '').strip()
+    location = body.get('location', '').strip()
+    try:
+        limit = min(int(body.get('limit', 10)), 25)
+    except:
+        limit = 10
+
+    if not niche or not location:
+        return jsonify({"error": "niche and location are required"}), 400
+
+    print(f"  → Prospecting: {niche} in {location} (limit {limit})")
+    sys.stdout.flush()
+
+    results = []
+    seen_names = set()
+
+    for platform, cfg in BOOKING_PLATFORMS.items():
+        domain = cfg["domain"]
+        queries = [
+            f'site:{domain} "{niche}" "{location}"',
+            f'site:{domain} {niche} {location}',
+        ]
+        for query in queries:
+            hits = search_web(query, max_results=5)
+            for r in hits:
+                url = r.get("url", "")
+                if domain not in url:
+                    continue
+                title = r.get("title", "").split("|")[0].split("-")[0].strip()
+                name_key = re.sub(r'[^a-z0-9]', '', (title + location).lower())[:20]
+                if not name_key or name_key in seen_names:
+                    continue
+                seen_names.add(name_key)
+                results.append({"business_name": title, "website": url, "platform": platform, "location": location, "industry": niche})
+            if len(results) >= limit:
+                break
+        if len(results) >= limit:
+            break
+
+    print(f"  → Found {len(results)} businesses to analyze")
+    sys.stdout.flush()
+
+    analyzed = []
+    for biz in results[:limit]:
+        try:
+            name = biz["business_name"]
+            site = biz["website"]
+            print(f"  → Analyzing: {name}")
+            sys.stdout.flush()
+
+            website_pages = {}
+            social_links  = {}
+            html, _ = safe_get(site)
+            if not html:
+                print(f"  ⚠ Skipping {name} — no HTML")
+                continue
+
+            website_pages["homepage"] = extract_text(html, 1500)
+            social_links = find_social_links(html)
+
+            try:
+                report = run_fast_pipeline(name, location, website_pages, {}, social_links)
+            except Exception as gpt_err:
+                print(f"  ⚠ GPT failed for {name}: {gpt_err}")
+                continue
+
+            report["company"]  = name
+            report["website"]  = site
+            report["location"] = location
+            report["industry"] = niche
+            report["recommended_saas"] = recommend_saas(report)
+
+            enrichment = extract_enrichment(website_pages, social_links)
+            try:
+                push_to_airtable(report, enrichment, website_url=site, location=location)
+                print(f"  ✓ Airtable push for {name}", flush=True)
+            except Exception as at_err:
+                print(f"  ⚠ Airtable push failed for {name}: {at_err}")
+
+            analyzed.append({
+                "business_name":   name,
+                "overall_score":   report.get("overall_score", 0),
+                "key_insight":     report.get("key_insight", ""),
+                "top_weakness":    (report.get("weaknesses") or [""])[0],
+                "recommended_saas": report.get("recommended_saas", []),
+                "website":         site,
+                "platform":        biz["platform"],
+            })
+            time.sleep(1)
+
+        except Exception as e:
+            print(f"  ✗ Failed: {biz.get('business_name')}: {e}")
+            continue
+
+    analyzed.sort(key=lambda x: x["overall_score"])
+    print(f"  ✓ Prospect run complete: {len(analyzed)} analyzed", flush=True)
+
+    return jsonify({"niche": niche, "location": location, "count": len(analyzed), "leads": analyzed})
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
