@@ -1738,30 +1738,50 @@ def get_primary_problem(report):
     return "Low customer conversion"
 
 def recommend_saas(report):
+    primary = report.get("primary_problem", "").lower()
     text = " ".join([
         report.get("key_insight", ""),
         " ".join(report.get("weaknesses", [])),
     ]).lower()
+
     recommendations = []
+
+    if "booking" in primary:
+        recommendations.append({"tool": "GlossGenius", "reason": "Improve booking and client management", "affiliate": "glossgenius.com"})
+    elif "follow" in primary or "crm" in primary:
+        recommendations.append({"tool": "ActiveCampaign", "reason": "Automated follow-up and CRM", "affiliate": "activecampaign.com"})
+    elif "google" in primary or "seo" in primary or "search" in primary:
+        recommendations.append({"tool": "Semrush", "reason": "Fix SEO and search visibility", "affiliate": "semrush.com"})
+    elif "website" in primary:
+        recommendations.append({"tool": "Webflow", "reason": "Rebuild weak or outdated website", "affiliate": "webflow.com"})
+    elif "social" in primary:
+        recommendations.append({"tool": "Later", "reason": "Social media scheduling and consistency", "affiliate": "later.com"})
+
     def has(*keywords):
         return any(k in text for k in keywords)
-    if has("crm", "follow up", "lead", "contact", "manual", "no system"):
+
+    if has("crm", "follow up", "follow-up", "no system") and not any(r["tool"] == "ActiveCampaign" for r in recommendations):
         recommendations.append({"tool": "ActiveCampaign", "reason": "Missing CRM and automated follow-up", "affiliate": "activecampaign.com"})
-    if has("website", "no site", "outdated", "poor design", "mobile"):
+
+    if has("website", "no site", "outdated") and not any(r["tool"] == "Webflow" for r in recommendations):
         recommendations.append({"tool": "Webflow", "reason": "Weak or outdated website", "affiliate": "webflow.com"})
-    if has("seo", "search", "google", "visibility", "ranking"):
+
+    if has("seo", "search", "google", "visibility", "ranking") and not any(r["tool"] == "Semrush" for r in recommendations):
         recommendations.append({"tool": "Semrush", "reason": "Low search visibility", "affiliate": "semrush.com"})
-    if has("booking", "appointments", "scheduling"):
+
+    if has("booking", "appointments", "scheduling") and not any(r["tool"] == "GlossGenius" for r in recommendations):
         recommendations.append({"tool": "GlossGenius", "reason": "Improve booking and client management", "affiliate": "glossgenius.com"})
-    if has("social", "instagram", "tiktok", "content", "posting"):
+
+    if has("social", "instagram", "tiktok", "content", "posting") and not any(r["tool"] == "Later" for r in recommendations):
         recommendations.append({"tool": "Later", "reason": "Social media scheduling and consistency", "affiliate": "later.com"})
-    seen = set()
-    final = []
-    for r in recommendations:
-        if r["tool"] not in seen:
-            final.append(r)
-            seen.add(r["tool"])
-    return final[:2]
+
+    if has("conversion", "funnel", "low booking", "not converting") and not any(r["tool"] == "ClickFunnels" for r in recommendations):
+        recommendations.append({"tool": "ClickFunnels", "reason": "Poor conversion and booking funnel", "affiliate": "clickfunnels.com"})
+
+    if not recommendations:
+        recommendations.append({"tool": "ActiveCampaign", "reason": "General customer retention and follow-up improvement", "affiliate": "activecampaign.com"})
+
+    return recommendations[:2]
 def search_google_places(niche, location, limit=10):
     import requests as req
     key = os.environ.get("GOOGLE_PLACES_KEY", "")
