@@ -1699,6 +1699,40 @@ def health():
 
 # ─── SAAS RECOMMENDER ─────────────────────────────────────────────────────────
 
+def calculate_score(report):
+    score = 50
+    text = " ".join([
+        report.get("key_insight", ""),
+        " ".join(report.get("weaknesses", []))
+    ]).lower()
+    if "no website" in text: score -= 15
+    if "no booking" in text: score -= 15
+    if "no crm" in text or "manual" in text: score -= 10
+    if "poor seo" in text or "not ranking" in text: score -= 10
+    if "low engagement" in text: score -= 5
+    if "limited" in text or "lacks" in text: score -= 8
+    if "strong brand" in text: score += 10
+    if "good presence" in text: score += 10
+    if "high engagement" in text: score += 10
+    return max(10, min(score, 90))
+
+def get_primary_problem(report):
+    text = " ".join([
+        report.get("key_insight", ""),
+        " ".join(report.get("weaknesses", []))
+    ]).lower()
+    if "booking" in text or "appointment" in text:
+        return "No or weak booking system"
+    if "crm" in text or "follow up" in text or "follow-up" in text:
+        return "No customer follow-up system"
+    if "seo" in text or "google" in text or "search" in text:
+        return "Not visible on Google search"
+    if "website" in text:
+        return "Weak or outdated website"
+    if "social" in text or "instagram" in text:
+        return "Weak social media presence"
+    return "Low customer conversion"
+
 def recommend_saas(report):
     text = " ".join([
         report.get("key_insight", ""),
@@ -1769,7 +1803,16 @@ def prospect():
                     continue
                 title = r.get("title", "").split("|")[0].split("-")[0].strip()
                 name_key = re.sub(r'[^a-z0-9]', '', (title + location).lower())[:20]
-                if any(x in title.lower() for x in ["near me", "top 20", "top 10", "best", "directory", "list of"]):
+                bad_title = title.lower()
+                if any(x in bad_title for x in [
+                    "near me", "top 20", "top 10", "top 30",
+                    "best", "directory", "list of", "search results", "guide"
+                ]):
+                    continue
+                bad_url = url.lower()
+                if any(x in bad_url for x in [
+                    "/search", "near-me", "top-", "best-"
+                ]):
                     continue
                 if not name_key or name_key in seen_names:
                     continue
@@ -1788,6 +1831,13 @@ def prospect():
         try:
             name = biz["business_name"]
             site = biz["website"]
+            name = biz["business_name"]
+            site = biz["website"]
+            if len(name) < 3 or "/" in name:
+                print(f"  ⚠ Skipping bad name: {name}")
+                continue
+            print(f"  → Analyzing: {name}")
+            sys.stdout.flush()
             print(f"  → Analyzing: {name}")
             sys.stdout.flush()
 
@@ -1811,7 +1861,11 @@ def prospect():
             report["website"]  = site
             report["location"] = location
             report["industry"] = niche
-            report["recommended_saas"] = recommend_saas(report)
+            report["overall_score"]       = calculate_score(report)
+            report["primary_problem"]     = get_primary_problem(report)
+            report["is_high_opportunity"] = report["overall_score"] < 45
+            report["recommended_saas"]    = recommend_saas(report)
+            
 
             enrichment = extract_enrichment(website_pages, social_links)
             try:
@@ -1821,13 +1875,15 @@ def prospect():
                 print(f"  ⚠ Airtable push failed for {name}: {at_err}")
 
             analyzed.append({
-                "business_name":   name,
-                "overall_score":   report.get("overall_score", 0),
-                "key_insight":     report.get("key_insight", ""),
-                "top_weakness":    (report.get("weaknesses") or [""])[0],
-                "recommended_saas": report.get("recommended_saas", []),
-                "website":         site,
-                "platform":        biz["platform"],
+                "business_name":        name,
+                "overall_score":        report.get("overall_score", 0),
+                "primary_problem":      report.get("primary_problem", ""),
+                "is_high_opportunity":  report.get("is_high_opportunity", False),
+                "key_insight":          report.get("key_insight", ""),
+                "top_weakness":         (report.get("weaknesses") or [""])[0],
+                "recommended_saas":     report.get("recommended_saas", []),
+                "website":              site,
+                "platform":             biz["platform"],
             })
             time.sleep(1)
 
