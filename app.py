@@ -209,7 +209,7 @@ def extract_text(html, max_chars=4000):
     return re.sub(r"\s+", " ", text)[:max_chars]
 
 def extract_social_metadata(html):
-    """Extract OG metadata from social pages — works even when full text is blocked."""
+    """Extract OG metadata from social pages - works even when full text is blocked."""
     if not html: return {}
     soup = BeautifulSoup(html, "html.parser")
     data = {}
