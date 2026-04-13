@@ -1954,9 +1954,6 @@ def prospect():
                 continue
             print(f"  → Analyzing: {name}")
             sys.stdout.flush()
-            print(f"  → Analyzing: {name}")
-            sys.stdout.flush()
-
             website_pages = {}
             social_links  = {}
             html, _ = safe_get(site)
