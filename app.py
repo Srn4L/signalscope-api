@@ -1,5 +1,5 @@
 """
-SignalScope Backend — /agent endpoint
+SignalScope Backend - /agent endpoint
 =====================================
 Add this to your existing Flask app on signalscope-api.onrender.com
 
@@ -26,7 +26,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 # ─── RATE LIMITING ────────────────────────────────────────────────────────────
-# Simple in-memory log — resets on dyno restart (fine for now)
+# Simple in-memory log - resets on dyno restart (fine for now)
 REQUEST_LOG  = defaultdict(list)  # ip → [timestamps]
 VALIDATE_LOG = defaultdict(list)  # ip → [timestamps]
 
@@ -58,7 +58,7 @@ def set_cache(key, data):
 
 # ─── BACKGROUND JOBS ──────────────────────────────────────────────────────────
 # Stores deep pipeline results keyed by job_id
-# Resets on restart — fine for now
+# Resets on restart  fine for now
 JOBS = {}  # job_id → {"status": "running|done|error", "result": ..., "error": ...}
 JOBS_TTL = 600  # clean up finished jobs after 10 minutes
 
@@ -100,11 +100,11 @@ ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 #
 # Two env vars on Render:
 #
-#   MASTER_CODE   — YOUR permanent code. Never expires. Set it once, never share it.
+#   MASTER_CODE    YOUR permanent code. Never expires. Set it once, never share it.
 #                   You will never be asked to re-enter it (stored in your browser).
 #                   e.g. "stanley_master_2024"
 #
-#   GUEST_CODES   — Comma-separated codes you give to specific people.
+#   GUEST_CODES    Comma-separated codes you give to specific people.
 #                   They must enter it every session. Revoke anytime by removing
 #                   it from this list and saving the env var (no redeploy needed).
 #                   e.g. "recruiter_abc,client_xyz,demo_user1"
@@ -118,11 +118,11 @@ MASTER_CODE  = _master
 GUEST_CODES  = {c.strip().lower() for c in _guests.split(",") if c.strip()}
 ALL_CODES    = GUEST_CODES | {MASTER_CODE}
 
-# Guest session expiry — how long a guest code stays valid after first use
+# Guest session expiry  how long a guest code stays valid after first use
 GUEST_SESSION_HOURS = int(os.environ.get("GUEST_SESSION_HOURS", "4"))
 
 # Tracks when each guest code was first validated: code → timestamp
-# Resets on Render restart (which is fine — forces re-entry)
+# Resets on Render restart (which is fine  forces re-entry)
 GUEST_SESSIONS = {}  # code → first_validated_timestamp
 
 
@@ -140,11 +140,11 @@ def get_code_type(req) -> str | None:
         now = time.time()
         first_used = GUEST_SESSIONS.get(token)
         if first_used is None:
-            # First time using this code — start the clock
+            # First time using this code - start the clock
             GUEST_SESSIONS[token] = now
             return "guest"
         if now - first_used > GUEST_SESSION_HOURS * 3600:
-            # Session expired — remove so they need a fresh code from you
+            # Session expired - remove so they need a fresh code from you
             del GUEST_SESSIONS[token]
             return None
         return "guest"
@@ -280,13 +280,13 @@ def parse_booking_card(html, platform, url):
     text = soup.get_text(separator=" ", strip=True).lower()
     raw_text = re.sub(r"\s+", " ", text)
 
-    # Business name — try title tag first
+    # Business name - try title tag first
     name = ""
     title_tag = soup.find("title")
     if title_tag:
         name = title_tag.get_text().strip().split("|")[0].split("-")[0].strip()
 
-    # Pricing — find dollar amounts with context
+    # Pricing - find dollar amounts with context
     price_pattern = re.compile(r'\$\s*(\d+(?:\.\d{2})?)\s*(?:[-–]\s*\$\s*(\d+(?:\.\d{2})?))?')
     prices_found = []
     for m in price_pattern.finditer(raw_text):
@@ -451,7 +451,7 @@ def format_booking_intelligence(cards):
             lines.append(f"  Avg Price: ${c['avg_price']} ({c['pricing_position']})")
         if c.get("pricing_signals"):
             for ps in c["pricing_signals"][:3]:
-                lines.append(f"  Price Signal: {ps['price']} — {ps['context'][:60]}")
+                lines.append(f"  Price Signal: {ps['price']} - {ps['context'][:60]}")
         if c.get("services"):
             lines.append(f"  Services: {', '.join(c['services'][:6])}")
         lines.append("")
@@ -576,7 +576,7 @@ def fetch_trend_intelligence(business_name, industry, location, website_pages):
 
 def format_trend_intelligence(trends):
     if not trends: return ""
-    lines = ["=== TREND INTELLIGENCE — WHAT'S HOT RIGHT NOW ===\n"]
+    lines = ["=== TREND INTELLIGENCE - WHAT'S HOT RIGHT NOW ===\n"]
     lines.append(f"Keywords: {', '.join(trends.get('keywords_analyzed',[]))}\n")
     if trends.get("tiktok_trends"):
         lines.append("TIKTOK TRENDING:")
@@ -684,7 +684,7 @@ def run_fast_pipeline(business_name, location, website_pages, social_text, socia
     platform_hint = f"Social platforms detected: {_known}" if _known else "No social profiles provided"
     social_presence_note = ""
     if _blocked:
-        social_presence_note = f"\nNOTE: Content scraping blocked for {_blocked} — treat as ACTIVE but unverified. Do NOT say 'no social presence'. State they have {_known} presence with limited visible content."
+        social_presence_note = f"\nNOTE: Content scraping blocked for {_blocked} - treat as ACTIVE but unverified. Do NOT say 'no social presence'. State they have {_known} presence with limited visible content."
     if _with_content:
         social_presence_note += f"\nContent retrieved from: {_with_content}"
     prompt = textwrap.dedent(f"""
@@ -697,11 +697,11 @@ def run_fast_pipeline(business_name, location, website_pages, social_text, socia
     DATA: {json.dumps(raw)[:4000]}
 
     STRICT RULES:
-    - Reference actual data found — prices, platforms, services, review sentiment
+    - Reference actual data found - prices, platforms, services, review sentiment
     - Never say "post more consistently" or "expand platform presence" without specifics
     - If pricing data exists, compare it to market norms
     - If social platforms are missing, name which ones and why they matter for this niche
-    - Set signal_confidence to "Low" if data was thin — be honest
+    - Set signal_confidence to "Low" if data was thin - be honest
     {{
       "company": "{business_name}",
       "industry": "detected industry from data",
@@ -733,9 +733,9 @@ def run_fast_pipeline(business_name, location, website_pages, social_text, socia
       "competitive_signals": {{"pricing_position":"unknown","pricing_notes":"Full competitor analysis loading...","main_competitors":[],"competitive_advantage":"observed advantage","market_gaps":"observed gap"}},
       "review_signals": {{"sentiment":"unknown","review_themes":[],"reputation_notes":""}},
       "signal_confidence": "Low",
-      "coverage_notes": "Fast analysis from homepage data — full intelligence loading in background.",
+      "coverage_notes": "Fast analysis from homepage data - full intelligence loading in background.",
       "cover_letter_snippet": "brief snippet about this business",
-      "ai_methodology_note": "Fast GPT pass — full multi-model analysis with competitor + trend intelligence loading."
+      "ai_methodology_note": "Fast GPT pass - full multi-model analysis with competitor + trend intelligence loading."
     }}
     Replace ALL placeholder text with real analysis from the data above.
     """)
@@ -884,7 +884,7 @@ def hs_create_deal(contact_id, business_name, priority_score):
     r = req.post(f"{HS_BASE}/crm/v3/objects/deals",
         headers=hs_headers(), json={
             "properties": {
-                "dealname":  f"{business_name} — Yelhao Lead",
+                "dealname":  f"{business_name} - Yelhao Lead",
                 "pipeline":  "default",
                 "dealstage": "appointmentscheduled",
                 "amount":    "",
@@ -909,9 +909,9 @@ def hs_create_note(contact_id, body):
 
 def push_to_hubspot(report, website_pages, social_links):
     """
-    Event-driven CRM sync — triggered automatically on deep job completion.
+    Event-driven CRM sync - triggered automatically on deep job completion.
     Creates or updates contact, creates deal, logs AI-generated note.
-    Silent fails — never blocks the report from returning to the user.
+    Silent fails - never blocks the report from returning to the user.
     """
     if not HUBSPOT_TOKEN:
         return
@@ -961,7 +961,7 @@ COMPETITOR GAP:
 {comp_sigs.get("market_gaps", "N/A")}
 
 PRICING POSITION:
-{comp_sigs.get("pricing_position", "unknown")} — {comp_sigs.get("pricing_notes", "")}
+{comp_sigs.get("pricing_position", "unknown")} - {comp_sigs.get("pricing_notes", "")}
 
 OUTREACH ANGLE:
 {report.get("cover_letter_snippet", "N/A")}
@@ -1001,7 +1001,7 @@ AIRTABLE_TABLE_ID = os.environ.get("AIRTABLE_TABLE_ID", "")
 def push_to_airtable(report, enrichment, website_url="", location=""):
     """
     Creates a new row in Airtable Leads table after deep analysis completes.
-    Silent fail — never blocks the report from returning to the user.
+    Silent fail - never blocks the report from returning to the user.
     """
     if not AIRTABLE_TOKEN or not AIRTABLE_BASE_ID or not AIRTABLE_TABLE_ID:
         print("  ⚠ Airtable: env vars not set, skipping")
@@ -1041,9 +1041,9 @@ def push_to_airtable(report, enrichment, website_url="", location=""):
         if r.status_code == 200:
             print(f"  ✓ Airtable: row created for {report.get('company')}", flush=True)
         else:
-            print(f"  ⚠ Airtable: failed {r.status_code} — {r.text[:100]}", flush=True)
+            print(f"  ⚠ Airtable: failed {r.status_code} - {r.text[:100]}", flush=True)
     except Exception as e:
-        print(f"  ⚠ Airtable: exception — {e}")
+        print(f"  ⚠ Airtable: exception - {e}")
 def run_deep_job(job_id, business_name, location, website_pages, social_text,
                  review_text, pricing_text, competitors, mode,
                  booking_cards, trend_data, ck, social_links=None):
@@ -1085,7 +1085,7 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
         JOBS[job_id] = {"status": "done", "result": response_data, "ts": time.time()}
         print(f"  ✓ Deep job {job_id} complete")
 
-        # ── Push to HubSpot (silent fail — never block the report) ────────────
+        # ── Push to HubSpot (silent fail - never block the report) ────────────
         try:
             push_to_hubspot(report, website_pages, social_links or {})
         except Exception as hs_err:
@@ -1126,10 +1126,10 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
     # ── MULTI-MODEL: GPT extract → Claude analyze → GPT validate ─────────────
     if mode == "multi_model":
 
-        # Stage 1 — GPT: structured signal extraction
+        # Stage 1 - GPT: structured signal extraction
         extract_prompt = textwrap.dedent(f"""
         You are a data extraction specialist. Extract structured marketing signals
-        from the raw scraped data below. Return ONLY valid JSON — no markdown, no explanation.
+        from the raw scraped data below. Return ONLY valid JSON - no markdown, no explanation.
 
         RAW DATA:
         Website: {json.dumps(website_pages)[:3000]}
@@ -1194,7 +1194,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         )
         structured = json.loads(r1.choices[0].message.content.strip())
 
-        # Stage 2 — Claude: deep strategic analysis
+        # Stage 2 - Claude: deep strategic analysis
         # pricing_text already contains formatted booking + trend intelligence
         # Build social state for Claude
         _s_detected = list((social_links or {}).keys())
@@ -1209,7 +1209,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         EXTRACTED SIGNALS:
         {json.dumps(structured, indent=2)}
 
-        SOCIAL PLATFORM STATE (IMPORTANT — use this for all social reasoning):
+        SOCIAL PLATFORM STATE (IMPORTANT - use this for all social reasoning):
         Platforms detected: {_s_detected}
         Platforms with scraped content: {_s_content}
         Platforms blocked (active but unverified): {_s_blocked}
@@ -1225,35 +1225,35 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         FULL INTELLIGENCE CONTEXT (reviews, pricing signals, web mentions):
         {pricing_text[:6000]}
 
-        RULES — STRICT:
+        RULES - STRICT:
         - NEVER give generic advice like "post more consistently" or "expand platform presence"
         - EVERY insight must reference specific data: competitor prices, ratings, trend names, or platform signals
         - If booking competitors have avg ratings, compare this business to them explicitly
         - If competitor pricing exists, state the market average and how this business compares
         - If a trend is detected, name it specifically and say how this business can capitalize on it
         - If review data exists, cite specific themes directly
-        - Scores must reflect actual data quality — be honest, not generous
+        - Scores must reflect actual data quality - be honest, not generous
         - ALWAYS compute a market baseline if competitor data is available:
           state the avg price, avg rating, and how this business compares explicitly
-          e.g. "Market avg: $92, 4.6★ — this business shows no pricing → conversion gap"
+          e.g. "Market avg: $92, 4.6★ - this business shows no pricing → conversion gap"
 
         Produce strategic analysis covering:
-        1. OVERALL SIGNAL SCORE (0-100) — honest
+        1. OVERALL SIGNAL SCORE (0-100) - honest
         2. SCORES (0-100, confidence low/medium/high, with specific evidence from data above):
            content_consistency, engagement_quality, content_diversity, brand_voice_clarity, platform_coverage
-        3. KEY INSIGHT — single most actionable finding backed by a specific data point
-        4. BRAND OVERVIEW — 2-3 sentences citing actual signals found
-        5. TOP 3 STRENGTHS — each must cite a specific signal or data point
-        6. TOP 3 WEAKNESSES — each must cite a specific gap or competitor advantage
-        7. CONTENT PATTERNS — what themes/formats are present or absent
-        8. SOCIAL STRATEGY — what they're doing and what they're missing, with specific platform context
-        9. COMPETITIVE POSITION — price vs market avg, rating vs competitors, specific gaps
-        10. GROWTH EXPERIMENTS (exactly 4) — each triggered by a specific signal found above,
+        3. KEY INSIGHT - single most actionable finding backed by a specific data point
+        4. BRAND OVERVIEW - 2-3 sentences citing actual signals found
+        5. TOP 3 STRENGTHS - each must cite a specific signal or data point
+        6. TOP 3 WEAKNESSES - each must cite a specific gap or competitor advantage
+        7. CONTENT PATTERNS - what themes/formats are present or absent
+        8. SOCIAL STRATEGY - what they're doing and what they're missing, with specific platform context
+        9. COMPETITIVE POSITION - price vs market avg, rating vs competitors, specific gaps
+        10. GROWTH EXPERIMENTS (exactly 4) - each triggered by a specific signal found above,
             with falsifiable hypothesis and numeric success threshold
-        11. STRATEGY BLUEPRINT — 4 pillars, posting mix %, channel priorities
-        12. PLATFORM SCORES — 0-100 per platform detected or relevant
-        13. REPUTATION — sentiment, specific review themes if found
-        14. COVERAGE NOTES — honest about what data was thin or missing
+        11. STRATEGY BLUEPRINT - 4 pillars, posting mix %, channel priorities
+        12. PLATFORM SCORES - 0-100 per platform detected or relevant
+        13. REPUTATION - sentiment, specific review themes if found
+        14. COVERAGE NOTES - honest about what data was thin or missing
         """)
 
         r2 = claude_client.messages.create(
@@ -1263,7 +1263,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         )
         claude_output = r2.content[0].text
 
-        # Stage 3 — GPT: fact-check Claude + format final JSON
+        # Stage 3 - GPT: fact-check Claude + format final JSON
         schema = {
             "company": business_name,
             "industry": "string",
@@ -1292,7 +1292,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
             "signal_confidence":  "Low|Medium|High",
             "coverage_notes":     "str",
             "cover_letter_snippet": "str",
-            "ai_methodology_note": "str — mention 3-stage pipeline: GPT extraction + Claude analysis + GPT validation",
+            "ai_methodology_note": "str - mention 3-stage pipeline: GPT extraction + Claude analysis + GPT validation",
         }
 
         format_prompt = textwrap.dedent(f"""
@@ -1315,7 +1315,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         {json.dumps(schema, indent=2)}
 
         Rules:
-        - Return ONLY valid JSON — no markdown, no backticks, no explanation
+        - Return ONLY valid JSON - no markdown, no backticks, no explanation
         - company field must be exactly: "{business_name}"
         - Generate exactly 4 experiments
         - posting_mix percentages must sum to 100
@@ -1339,7 +1339,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
     elif mode == "claude_only":
         prompt = textwrap.dedent(f"""
         You are a senior marketing strategist. Analyze {business_name} ({location}).
-        Return ONLY valid JSON — no markdown, no backticks.
+        Return ONLY valid JSON - no markdown, no backticks.
 
         DATA:
         {json.dumps(raw_data)[:5000]}
@@ -1373,18 +1373,18 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
     # ── GPT ONLY: single fast pass (thin data) ────────────────────────────────
     else:
         prompt = textwrap.dedent(f"""
-        You are a marketing analyst for small businesses. Be specific — never generic.
+        You are a marketing analyst for small businesses. Be specific - never generic.
 
         BUSINESS: {business_name} ({location})
 
         DATA: {json.dumps(raw_data)[:4000]}
 
         STRICT RULES:
-        - Reference actual data found — prices, platforms, services, review sentiment
+        - Reference actual data found - prices, platforms, services, review sentiment
         - Never say "post more consistently" or "expand platform presence" without specifics
         - If pricing data exists, compare it to market norms
         - If social platforms are missing, name which ones and why they matter for this niche
-        - Set signal_confidence to "Low" if data was thin — be honest
+        - Set signal_confidence to "Low" if data was thin - be honest
 
         Return ONLY valid JSON with these keys:
         company ("{business_name}"), industry, overall_score, key_insight,
@@ -1430,7 +1430,7 @@ def agent():
         ip    = request.remote_addr
         token = request.headers.get("X-Agent-Token", "").strip().lower()
         if not check_rate_limit(REQUEST_LOG, f"{ip}:{token}", RATE_LIMIT_AGENT):
-            return jsonify({"error": "Rate limit exceeded — 10 analyses per hour."}), 429
+            return jsonify({"error": "Rate limit exceeded - 10 analyses per hour."}), 429
 
     init_clients()
     if not gpt_client or not claude_client:
@@ -1500,7 +1500,7 @@ def agent():
                             social_links[k] = v
                 break
 
-    # ── Scrape social — parallel fetches with metadata fallback ──────────────
+    # ── Scrape social - parallel fetches with metadata fallback ──────────────
     social_text = {}
     if social_links:
         from concurrent.futures import ThreadPoolExecutor as _SPE
@@ -1516,9 +1516,9 @@ def agent():
                 if meta:
                     meta_str = " | ".join(f"{k}: {v}" for k,v in meta.items() if v)
                     return platform, f"[{platform.upper()} METADATA]: {meta_str}"
-            # Never discard user-provided links — record presence even if scraping fails
+            # Never discard user-provided links - record presence even if scraping fails
             if platform in manual_socials:
-                return platform, f"[{platform.upper()} PRESENCE DETECTED — content blocked by platform]"
+                return platform, f"[{platform.upper()} PRESENCE DETECTED - content blocked by platform]"
             return platform, None
         with _SPE(max_workers=3) as ex:
             for platform, text in ex.map(_fetch_social, social_links.items()):
@@ -1535,26 +1535,26 @@ def agent():
                     platform_hint = next((p for p in ["instagram","tiktok","twitter","linkedin","facebook"] if p in user_content), "social")
                     social_text[platform_hint] = f"[USER-PROVIDED URL]:\n{fetched}"
         else:
-            social_text["user_provided"] = f"[USER-PROVIDED CONTENT — highest confidence]:\n{user_content}"
+            social_text["user_provided"] = f"[USER-PROVIDED CONTENT - highest confidence]:\n{user_content}"
 
-    # ── FAST RESPONSE — run GPT immediately, return to user ───────────────────
+    # ── FAST RESPONSE - run GPT immediately, return to user ───────────────────
     try:
         fast_report = run_fast_pipeline(business_name, location, website_pages, social_text, social_links)
         fast_report["company"] = business_name
     except Exception as e:
         fast_report = {"company": business_name, "error": str(e), "overall_score": 0}
 
-    # ── DEEP ANALYSIS — run in background thread ──────────────────────────────
+    # ── DEEP ANALYSIS - run in background thread ──────────────────────────────
     job_id = str(uuid.uuid4())[:8]
     JOBS[job_id] = {"status": "running"}
 
     def deep_work():
         try:
             pages        = dict(website_pages)
-            local_social = dict(social_text)  # clone — never mutate shared state across threads
+            local_social = dict(social_text)  # clone - never mutate shared state across threads
             _social_links = social_links      # capture explicitly for closure safety
 
-            # Collect trends + booking — use cache if available
+            # Collect trends + booking - use cache if available
             cached_trends  = get_cached(ck + '_trends')
             cached_booking = get_cached(ck + '_booking')
             try:
@@ -1564,7 +1564,7 @@ def agent():
                 booking_cards = cached_booking or scrape_booking_competitors(business_name, industry, location, 3)
             except: booking_cards = []
 
-            # Layer 2+3 social — DuckDuckGo cached posts + metadata
+            # Layer 2+3 social - DuckDuckGo cached posts + metadata
             for platform, url in _social_links.items():
                 if platform in local_social and len(local_social.get(platform,"")) > 200:
                     continue
@@ -1582,8 +1582,8 @@ def agent():
                         existing = local_social.get(platform, "")
                         local_social[platform] = existing + "\n[Cached posts via search]:\n" + "\n".join(snippets[:3])
                     elif platform not in local_social:
-                        # Still record presence — platform exists even if no cached content
-                        local_social[platform] = f"[{platform.upper()} PRESENCE — {url}] No cached posts found. Platform blocks scraping."
+                        # Still record presence - platform exists even if no cached content
+                        local_social[platform] = f"[{platform.upper()} PRESENCE - {url}] No cached posts found. Platform blocks scraping."
 
             # Parallelize press + reviews + pricing searches
             from concurrent.futures import ThreadPoolExecutor as _TPE
@@ -1658,7 +1658,7 @@ def agent():
     fast_brain = {
         "complexity_score": 0,
         "pipeline_mode":    "fast",
-        "routing_reasons":  [f"Fast analysis complete — enhancing with full intelligence (job: {job_id})"],
+        "routing_reasons":  [f"Fast analysis complete - enhancing with full intelligence (job: {job_id})"],
         "data_quality":     build_data_quality(website_pages, social_text, "", []),
         "booking_competitors": [],
         "trend_intelligence":  None,
@@ -1956,7 +1956,7 @@ def prospect():
             social_links  = {}
             html, _ = safe_get(site)
             if not html:
-                print(f"  ⚠ Skipping {name} — no HTML")
+                print(f"  ⚠ Skipping {name} - no HTML")
                 continue
 
             website_pages["homepage"] = extract_text(html, 1500)
