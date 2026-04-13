@@ -25,17 +25,17 @@ from collections import defaultdict
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-# ─── RATE LIMITING ────────────────────────────────────────────────────────────
+# --- RATE LIMITING ------------------------------------------------------------
 # Simple in-memory log - resets on dyno restart (fine for now)
-REQUEST_LOG  = defaultdict(list)  # ip → [timestamps]
-VALIDATE_LOG = defaultdict(list)  # ip → [timestamps]
+REQUEST_LOG  = defaultdict(list)  # ip -> [timestamps]
+VALIDATE_LOG = defaultdict(list)  # ip -> [timestamps]
 
 RATE_LIMIT_VALIDATE = 20   # max /validate attempts per IP per hour
 
-# ─── RESPONSE CACHE ───────────────────────────────────────────────────────────
+# --- RESPONSE CACHE -----------------------------------------------------------
 # Caches full agent responses by business name + location for 24 hours.
 # Repeat analyses on the same business return instantly and cost nothing.
-CACHE     = {}          # key → (response_data, timestamp)
+CACHE     = {}          # key -> (response_data, timestamp)
 CACHE_TTL = 86400       # 24 hours in seconds
 
 def cache_key(business_name, website_url, location):
@@ -56,10 +56,10 @@ def set_cache(key, data):
     """Store response in cache."""
     CACHE[key] = (data, time.time())
 
-# ─── BACKGROUND JOBS ──────────────────────────────────────────────────────────
+# --- BACKGROUND JOBS ----------------------------------------------------------
 # Stores deep pipeline results keyed by job_id
 # Resets on restart  fine for now
-JOBS = {}  # job_id → {"status": "running|done|error", "result": ..., "error": ...}
+JOBS = {}  # job_id -> {"status": "running|done|error", "result": ..., "error": ...}
 JOBS_TTL = 600  # clean up finished jobs after 10 minutes
 
 def cleanup_jobs():
@@ -96,7 +96,7 @@ CORS(app)
 OPENAI_KEY    = os.environ.get("OPENAI_API_KEY",    "")
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
-# ─── ACCESS CONTROL ──────────────────────────────────────────────────────────
+# --- ACCESS CONTROL ----------------------------------------------------------
 #
 # Two env vars on Render:
 #
@@ -121,9 +121,9 @@ ALL_CODES    = GUEST_CODES | {MASTER_CODE}
 # Guest session expiry  how long a guest code stays valid after first use
 GUEST_SESSION_HOURS = int(os.environ.get("GUEST_SESSION_HOURS", "4"))
 
-# Tracks when each guest code was first validated: code → timestamp
+# Tracks when each guest code was first validated: code -> timestamp
 # Resets on Render restart (which is fine  forces re-entry)
-GUEST_SESSIONS = {}  # code → first_validated_timestamp
+GUEST_SESSIONS = {}  # code -> first_validated_timestamp
 
 
 def get_code_type(req) -> str | None:
@@ -155,7 +155,7 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# ─── CLIENTS ──────────────────────────────────────────────────────────────────
+# --- CLIENTS ------------------------------------------------------------------
 
 gpt_client    = None
 claude_client = None
@@ -167,7 +167,7 @@ def init_clients():
     if ANTHROPIC_KEY and not claude_client:
         claude_client = Anthropic(api_key=ANTHROPIC_KEY)
 
-# ─── MINIMAL INLINE VERSIONS (replace with full versions from agent_v2.py) ──
+# --- MINIMAL INLINE VERSIONS (replace with full versions from agent_v2.py) --
 
 SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
 
@@ -177,7 +177,7 @@ def safe_get(url, timeout=10):
     blocked sites, Cloudflare, JS-rendered pages). Falls back to direct
     requests if no key is set or ScraperAPI fails.
     """
-    # ── ScraperAPI (handles blocked sites) ───────────────────────────────────
+    # -- ScraperAPI (handles blocked sites) -----------------------------------
     if SCRAPER_API_KEY:
         try:
             proxy_url = (
@@ -193,7 +193,7 @@ def safe_get(url, timeout=10):
             # Fall through to direct request if ScraperAPI fails
             pass
 
-    # ── Direct request fallback ───────────────────────────────────────────────
+    # -- Direct request fallback -----------------------------------------------
     try:
         r = req.get(url, headers=HEADERS, timeout=10)
         r.raise_for_status()
@@ -252,7 +252,7 @@ def search_web(query, max_results=6):
     return snippets
 
 
-# ── BOOKING PLATFORM INTELLIGENCE ────────────────────────────────────────────
+# -- BOOKING PLATFORM INTELLIGENCE --------------------------------------------
 
 BOOKING_PLATFORMS = {
     "booksy":    {"domain": "booksy.com",    "search": "booksy.com/en-US/s/"},
@@ -287,7 +287,7 @@ def parse_booking_card(html, platform, url):
         name = title_tag.get_text().strip().split("|")[0].split("-")[0].strip()
 
     # Pricing - find dollar amounts with context
-    price_pattern = re.compile(r'\$\s*(\d+(?:\.\d{2})?)\s*(?:[-–]\s*\$\s*(\d+(?:\.\d{2})?))?')
+    price_pattern = re.compile(r'\$\s*(\d+(?:\.\d{2})?)\s*(?:[--]\s*\$\s*(\d+(?:\.\d{2})?))?')
     prices_found = []
     for m in price_pattern.finditer(raw_text):
         lo = float(m.group(1))
@@ -299,7 +299,7 @@ def parse_booking_card(html, platform, url):
     pricing_signals = []
     for lo, hi, pos in prices_found[:8]:
         context = raw_text[max(0, pos-40):pos+40].strip()
-        label = f"${lo:.0f}" if lo == hi else f"${lo:.0f}–${hi:.0f}"
+        label = f"${lo:.0f}" if lo == hi else f"${lo:.0f}-${hi:.0f}"
         pricing_signals.append({"price": label, "context": context})
 
     # Average price
@@ -358,7 +358,7 @@ def scrape_booking_competitors(business_name, industry, location, limit=5):
     Search all 6 booking platforms for local competitors.
     Returns a list of competitor cards with pricing, ratings, and services.
     """
-    print(f"  → Booking platforms: searching {industry or business_name} in {location}...")
+    print(f"  -> Booking platforms: searching {industry or business_name} in {location}...")
 
     service_hint = industry or business_name
     cards = []
@@ -431,7 +431,7 @@ def scrape_booking_competitors(business_name, industry, location, limit=5):
 
         time.sleep(0.2)  # be polite between platforms
 
-    print(f"  ✓ Booking intelligence: {len(cards)} competitor cards from {len(set(c['platform'] for c in cards))} platforms")
+    print(f"  [OK] Booking intelligence: {len(cards)} competitor cards from {len(set(c['platform'] for c in cards))} platforms")
     return cards[:limit]
 
 
@@ -446,7 +446,7 @@ def format_booking_intelligence(cards):
         lines.append(f"  URL: {c.get('url','')}")
         if c.get("rating"):
             rev = f" ({c['review_count']} reviews)" if c.get("review_count") else ""
-            lines.append(f"  Rating: {c['rating']}★{rev}")
+            lines.append(f"  Rating: {c['rating']}*{rev}")
         if c.get("avg_price"):
             lines.append(f"  Avg Price: ${c['avg_price']} ({c['pricing_position']})")
         if c.get("pricing_signals"):
@@ -461,7 +461,7 @@ def format_booking_intelligence(cards):
     priced = [c for c in cards if c.get("avg_price")]
     if rated:
         avg_rating = round(sum(c["rating"] for c in rated) / len(rated), 1)
-        lines.append(f"Market Avg Rating: {avg_rating}★ across {len(rated)} competitors")
+        lines.append(f"Market Avg Rating: {avg_rating}* across {len(rated)} competitors")
     if priced:
         avg_price = round(sum(c["avg_price"] for c in priced) / len(priced))
         lines.append(f"Market Avg Price: ${avg_price}")
@@ -472,7 +472,7 @@ def format_booking_intelligence(cards):
     return "\n".join(lines)
 
 
-# ── TREND INTELLIGENCE ────────────────────────────────────────────────────────
+# -- TREND INTELLIGENCE --------------------------------------------------------
 
 NICHE_KEYWORDS = {
     "hair":       ["hairstyle trend", "hair color trend", "haircut trend", "hair tutorial"],
@@ -552,11 +552,11 @@ def scrape_reddit_trends(keyword):
 
 
 def fetch_trend_intelligence(business_name, industry, location, website_pages):
-    print(f"  → Trend intelligence for niche: {industry or business_name}")
+    print(f"  -> Trend intelligence for niche: {industry or business_name}")
     keywords = detect_niche_keywords(industry, business_name, website_pages)
     if not keywords:
         return None
-    print(f"  → Trend keywords: {keywords[:3]}")
+    print(f"  -> Trend keywords: {keywords[:3]}")
     all_trends = []
     for keyword in keywords[:1]:
         all_trends.extend(scrape_tiktok_trends(keyword))
@@ -570,7 +570,7 @@ def fetch_trend_intelligence(business_name, industry, location, website_pages):
         "reddit_signals":    reddit,
         "top_hashtags":      list(set(h for t in all_trends for h in t.get("hashtags",[]) if len(h) > 3))[:10],
     }
-    print(f"  ✓ Trends: {len(result['tiktok_trends'])} TikTok, {len(result['instagram_trends'])} Instagram, {len(result['reddit_signals'])} Reddit")
+    print(f"  [OK] Trends: {len(result['tiktok_trends'])} TikTok, {len(result['instagram_trends'])} Instagram, {len(result['reddit_signals'])} Reddit")
     return result
 
 
@@ -582,19 +582,19 @@ def format_trend_intelligence(trends):
         lines.append("TIKTOK TRENDING:")
         for t in trends["tiktok_trends"][:4]:
             views = f" [{t['views']}]" if t.get("views") else ""
-            lines.append(f"  • {t['title']}{views}")
+            lines.append(f"  * {t['title']}{views}")
             if t.get("snippet"): lines.append(f"    {t['snippet'][:120]}")
             tags = " ".join(t.get("hashtags",[])[:3])
             if tags: lines.append(f"    Tags: {tags}")
     if trends.get("instagram_trends"):
         lines.append("\nINSTAGRAM TRENDING:")
         for t in trends["instagram_trends"][:3]:
-            lines.append(f"  • {t['title']}")
+            lines.append(f"  * {t['title']}")
             if t.get("snippet"): lines.append(f"    {t['snippet'][:120]}")
     if trends.get("reddit_signals"):
         lines.append("\nCONSUMER DEMAND (Reddit):")
         for t in trends["reddit_signals"][:3]:
-            lines.append(f"  • {t['title']}: {t['snippet'][:100]}")
+            lines.append(f"  * {t['title']}: {t['snippet'][:100]}")
     if trends.get("top_hashtags"):
         lines.append(f"\nTOP HASHTAGS: {' '.join(trends['top_hashtags'][:8])}")
     return "\n".join(lines)
@@ -809,7 +809,7 @@ def extract_enrichment(website_pages, social_links, website_url=""):
     return enrichment
 
 
-# ─── HUBSPOT INTEGRATION ──────────────────────────────────────────────────────
+# --- HUBSPOT INTEGRATION ------------------------------------------------------
 
 HUBSPOT_TOKEN = os.environ.get("HUBSPOT_TOKEN", "")
 HS_BASE       = "https://api.hubapi.com"
@@ -950,7 +950,7 @@ Priority Score: {priority}/100
 {f'Booking URL: {booking_url}' if booking_url else ''}
 {f'Phone: {phone}' if phone else ''}
 
-──────────────────────────
+--------------------------
 KEY INSIGHT:
 {report.get("key_insight", "N/A")}
 
@@ -968,31 +968,31 @@ OUTREACH ANGLE:
 
 PLATFORMS DETECTED:
 {", ".join(social_links.keys()) or "None detected"}
-──────────────────────────
-Generated by Yelhao AI · yelhoa.netlify.app"""
+--------------------------
+Generated by Yelhao AI . yelhoa.netlify.app"""
 
-    # Dedup: find by email → fall back to domain
+    # Dedup: find by email -> fall back to domain
     contact_id = hs_find_contact(email=email or None, domain=website or None)
 
     if contact_id:
         hs_update_contact(contact_id, website, instagram, location, phone, booking_platform)
-        print(f"  ✓ HubSpot: updated contact {contact_id} for {business_name}")
+        print(f"  [OK] HubSpot: updated contact {contact_id} for {business_name}")
     else:
         contact_id = hs_create_contact(
             business_name, email, website, instagram,
             location, niche, phone, booking_platform
         )
         if not contact_id:
-            print(f"  ⚠ HubSpot: failed to create contact for {business_name}")
+            print(f"  [!] HubSpot: failed to create contact for {business_name}")
             return
-        print(f"  ✓ HubSpot: created contact {contact_id} for {business_name}")
+        print(f"  [OK] HubSpot: created contact {contact_id} for {business_name}")
 
     deal_id = hs_create_deal(contact_id, business_name, priority)
-    print(f"  ✓ HubSpot: deal {deal_id} created (priority {priority})")
+    print(f"  [OK] HubSpot: deal {deal_id} created (priority {priority})")
 
     hs_create_note(contact_id, note_body)
-    print(f"  ✓ HubSpot: note logged for {business_name}")
-# ─── AIRTABLE INTEGRATION ─────────────────────────────────────────────────────
+    print(f"  [OK] HubSpot: note logged for {business_name}")
+# --- AIRTABLE INTEGRATION -----------------------------------------------------
 
 AIRTABLE_TOKEN    = os.environ.get("AIRTABLE_TOKEN", "")
 AIRTABLE_BASE_ID  = os.environ.get("AIRTABLE_BASE_ID", "")
@@ -1004,7 +1004,7 @@ def push_to_airtable(report, enrichment, website_url="", location=""):
     Silent fail - never blocks the report from returning to the user.
     """
     if not AIRTABLE_TOKEN or not AIRTABLE_BASE_ID or not AIRTABLE_TABLE_ID:
-        print("  ⚠ Airtable: env vars not set, skipping")
+        print("  [!] Airtable: env vars not set, skipping")
         return
 
     weaknesses  = report.get("weaknesses", [])
@@ -1039,11 +1039,11 @@ def push_to_airtable(report, enrichment, website_url="", location=""):
             timeout=5,
         )
         if r.status_code == 200:
-            print(f"  ✓ Airtable: row created for {report.get('company')}", flush=True)
+            print(f"  [OK] Airtable: row created for {report.get('company')}", flush=True)
         else:
-            print(f"  ⚠ Airtable: failed {r.status_code} - {r.text[:100]}", flush=True)
+            print(f"  [!] Airtable: failed {r.status_code} - {r.text[:100]}", flush=True)
     except Exception as e:
-        print(f"  ⚠ Airtable: exception - {e}")
+        print(f"  [!] Airtable: exception - {e}")
 def run_deep_job(job_id, business_name, location, website_pages, social_text,
                  review_text, pricing_text, competitors, mode,
                  booking_cards, trend_data, ck, social_links=None):
@@ -1083,22 +1083,22 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
         if booking_cards: set_cache(ck + '_booking', booking_cards)
         if trend_data:    set_cache(ck + '_trends',  trend_data)
         JOBS[job_id] = {"status": "done", "result": response_data, "ts": time.time()}
-        print(f"  ✓ Deep job {job_id} complete")
+        print(f"  [OK] Deep job {job_id} complete")
 
-        # ── Push to HubSpot (silent fail - never block the report) ────────────
+        # -- Push to HubSpot (silent fail - never block the report) ------------
         try:
             push_to_hubspot(report, website_pages, social_links or {})
         except Exception as hs_err:
-            print(f"  ⚠ HubSpot sync failed (non-critical): {hs_err}")
-        # ── Push to Airtable ──────────────────────────────────────────────
-        print("  → Attempting Airtable push...")
+            print(f"  [!] HubSpot sync failed (non-critical): {hs_err}")
+        # -- Push to Airtable ----------------------------------------------
+        print("  -> Attempting Airtable push...")
         try:
             enrichment = extract_enrichment(website_pages, social_links or {})
             push_to_airtable(report, enrichment, website_url=report.get("website",""), location=report.get("location",""))
         except Exception as at_err:
-            print(f"  ⚠ Airtable sync failed (non-critical): {at_err}")
+            print(f"  [!] Airtable sync failed (non-critical): {at_err}")
     except Exception as e:
-        print(f"  ✗ Deep job {job_id} failed: {e}")
+        print(f"  [X] Deep job {job_id} failed: {e}")
         JOBS[job_id] = {"status": "error", "error": str(e), "ts": time.time()}
 
 
@@ -1107,9 +1107,9 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
                       booking_cards=None, trend_data=None, social_links=None):
     """
     Three-stage multi-model pipeline:
-      multi_model  → GPT extract → Claude analyze → GPT validate+format
-      claude_only  → Claude direct analysis
-      gpt_only     → GPT single pass (thin data)
+      multi_model  -> GPT extract -> Claude analyze -> GPT validate+format
+      claude_only  -> Claude direct analysis
+      gpt_only     -> GPT single pass (thin data)
     """
     import textwrap
 
@@ -1123,7 +1123,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         "competitors":   competitors,
     }
 
-    # ── MULTI-MODEL: GPT extract → Claude analyze → GPT validate ─────────────
+    # -- MULTI-MODEL: GPT extract -> Claude analyze -> GPT validate -------------
     if mode == "multi_model":
 
         # Stage 1 - GPT: structured signal extraction
@@ -1235,7 +1235,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         - Scores must reflect actual data quality - be honest, not generous
         - ALWAYS compute a market baseline if competitor data is available:
           state the avg price, avg rating, and how this business compares explicitly
-          e.g. "Market avg: $92, 4.6★ - this business shows no pricing → conversion gap"
+          e.g. "Market avg: $92, 4.6* - this business shows no pricing -> conversion gap"
 
         Produce strategic analysis covering:
         1. OVERALL SIGNAL SCORE (0-100) - honest
@@ -1335,7 +1335,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         )
         return json.loads(r3.choices[0].message.content.strip())
 
-    # ── CLAUDE ONLY: direct analysis pass ────────────────────────────────────
+    # -- CLAUDE ONLY: direct analysis pass ------------------------------------
     elif mode == "claude_only":
         prompt = textwrap.dedent(f"""
         You are a senior marketing strategist. Analyze {business_name} ({location}).
@@ -1370,7 +1370,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         raw = re.sub(r"```$", "", raw).strip()
         return json.loads(raw)
 
-    # ── GPT ONLY: single fast pass (thin data) ────────────────────────────────
+    # -- GPT ONLY: single fast pass (thin data) --------------------------------
     else:
         prompt = textwrap.dedent(f"""
         You are a marketing analyst for small businesses. Be specific - never generic.
@@ -1416,12 +1416,12 @@ def job_status(job_id):
     return jsonify(job)
 
 
-# ─── /agent ENDPOINT ──────────────────────────────────────────────────────────
+# --- /agent ENDPOINT ----------------------------------------------------------
 
 @app.route('/agent', methods=['POST'])
 def agent():
     if len(JOBS) > 100: cleanup_jobs()  # cap size + remove stale jobs
-    # ── Auth ──────────────────────────────────────────────────────────────────
+    # -- Auth ------------------------------------------------------------------
     code_type = get_code_type(request)
     if code_type is None:
         return jsonify({"error": "Access denied. Valid access code required."}), 401
@@ -1458,14 +1458,14 @@ def agent():
     if not website_url and not manual_socials:
         return jsonify({"error": "Provide at least a website URL or one social profile"}), 400
 
-    # ── Cache check ───────────────────────────────────────────────────────────
+    # -- Cache check -----------------------------------------------------------
     ck = cache_key(business_name, website_url, location)
     cached = get_cached(ck)
     if cached and not user_content:
         cached["_from_cache"] = True
         return jsonify(cached)
 
-    # ── Scrape website ────────────────────────────────────────────────────────
+    # -- Scrape website --------------------------------------------------------
     website_pages = {}
     social_links  = manual_socials.copy()
 
@@ -1500,7 +1500,7 @@ def agent():
                             social_links[k] = v
                 break
 
-    # ── Scrape social - parallel fetches with metadata fallback ──────────────
+    # -- Scrape social - parallel fetches with metadata fallback --------------
     social_text = {}
     if social_links:
         from concurrent.futures import ThreadPoolExecutor as _SPE
@@ -1537,14 +1537,14 @@ def agent():
         else:
             social_text["user_provided"] = f"[USER-PROVIDED CONTENT - highest confidence]:\n{user_content}"
 
-    # ── FAST RESPONSE - run GPT immediately, return to user ───────────────────
+    # -- FAST RESPONSE - run GPT immediately, return to user -------------------
     try:
         fast_report = run_fast_pipeline(business_name, location, website_pages, social_text, social_links)
         fast_report["company"] = business_name
     except Exception as e:
         fast_report = {"company": business_name, "error": str(e), "overall_score": 0}
 
-    # ── DEEP ANALYSIS - run in background thread ──────────────────────────────
+    # -- DEEP ANALYSIS - run in background thread ------------------------------
     job_id = str(uuid.uuid4())[:8]
     JOBS[job_id] = {"status": "running"}
 
@@ -1629,7 +1629,7 @@ def agent():
             seen = set(urlparse(c.get("url","")).netloc.replace("www.","") for c in booking_cards if c.get("url"))
             competitors = [{"domain": urlparse(c.get("url","")).netloc.replace("www.",""), 
                             "title": c.get("name", c.get("title", "")),
-                            "body": f"Platform: {c.get('platform','')} | Rating: {c.get('rating','N/A')}★ | ${c.get('avg_price','N/A')}"} 
+                            "body": f"Platform: {c.get('platform','')} | Rating: {c.get('rating','N/A')}* | ${c.get('avg_price','N/A')}"} 
                            for c in booking_cards if c.get("url")]
             SKIP = ["yelp.com","google.com","facebook.com","yellowpages.com","bbb.org","tripadvisor.com",
                    "reddit.com","booksy.com","fresha.com","styleseat.com","vagaro.com","mindbody.io"]
@@ -1650,11 +1650,11 @@ def agent():
                         booking_cards, trend_data, ck, _social_links)
         except Exception as e:
             JOBS[job_id] = {"status": "error", "error": str(e), "ts": time.time()}
-            print(f"  ✗ Deep work failed: {e}")
+            print(f"  [X] Deep work failed: {e}")
 
     Thread(target=deep_work, daemon=True).start()
 
-    # ── Return fast report immediately ────────────────────────────────────────
+    # -- Return fast report immediately ----------------------------------------
     fast_brain = {
         "complexity_score": 0,
         "pipeline_mode":    "fast",
@@ -1695,7 +1695,7 @@ def validate():
 def health():
     return jsonify({"status": "ok", "agent_version": "2.0"})
 
-# ─── SAAS RECOMMENDER ─────────────────────────────────────────────────────────
+# --- SAAS RECOMMENDER ---------------------------------------------------------
 
 def calculate_score(report):
     score = 50
@@ -1819,10 +1819,10 @@ def search_google_places(niche, location, limit=10):
                 "review_count":  p.get("user_ratings_total", 0),
             })
             time.sleep(1)
-        print(f"  → Google Places: {len(results)} results")
+        print(f"  -> Google Places: {len(results)} results")
         return results
     except Exception as e:
-        print(f"  ⚠ Google Places failed: {e}")
+        print(f"  [!] Google Places failed: {e}")
         return []
 
 
@@ -1867,14 +1867,14 @@ def search_geoapify(niche, location, limit=10):
                 "rating":        0,
                 "review_count":  0,
             })
-        print(f"  → Geoapify: {len(results)} results")
+        print(f"  -> Geoapify: {len(results)} results")
         return results
     except Exception as e:
-        print(f"  ⚠ Geoapify failed: {e}")
+        print(f"  [!] Geoapify failed: {e}")
         return []
 
 
-# ─── /prospect ENDPOINT ───────────────────────────────────────────────────────
+# --- /prospect ENDPOINT -------------------------------------------------------
 
 @app.route('/prospect', methods=['POST'])
 def prospect():
@@ -1897,7 +1897,7 @@ def prospect():
     if not niche or not location:
         return jsonify({"error": "niche and location are required"}), 400
 
-    print(f"  → Prospecting: {niche} in {location} (limit {limit})")
+    print(f"  -> Prospecting: {niche} in {location} (limit {limit})")
     sys.stdout.flush()
 
     results = []
@@ -1906,11 +1906,11 @@ def prospect():
     raw = search_google_places(niche, location, limit=limit)
 
     if not raw:
-        print("  → Google Places empty, trying Geoapify...")
+        print("  -> Google Places empty, trying Geoapify...")
         raw = search_geoapify(niche, location, limit=limit)
 
     if not raw:
-        print("  → Geoapify empty, falling back to booking platforms...")
+        print("  -> Geoapify empty, falling back to booking platforms...")
         for platform, cfg in BOOKING_PLATFORMS.items():
             domain = cfg["domain"]
             for query in [f'site:{domain} "{niche}" "{location}"', f'site:{domain} {niche} {location}']:
@@ -1938,7 +1938,7 @@ def prospect():
             results.append(biz)
 
     results = results[:limit]
-    print(f"  → Found {len(results)} businesses to analyze")
+    print(f"  -> Found {len(results)} businesses to analyze")
     sys.stdout.flush()
     analyzed = []
     for biz in results[:limit]:
@@ -1948,15 +1948,15 @@ def prospect():
             name = biz["business_name"]
             site = biz["website"]
             if len(name) < 3 or "/" in name:
-                print(f"  ⚠ Skipping bad name: {name}")
+                print(f"  [!] Skipping bad name: {name}")
                 continue
-            print(f"  → Analyzing: {name}")
+            print(f"  -> Analyzing: {name}")
             sys.stdout.flush()
             website_pages = {}
             social_links  = {}
             html, _ = safe_get(site)
             if not html:
-                print(f"  ⚠ Skipping {name} - no HTML")
+                print(f"  [!] Skipping {name} - no HTML")
                 continue
 
             website_pages["homepage"] = extract_text(html, 1500)
@@ -1965,7 +1965,7 @@ def prospect():
             try:
                 report = run_fast_pipeline(name, location, website_pages, {}, social_links)
             except Exception as gpt_err:
-                print(f"  ⚠ GPT failed for {name}: {gpt_err}")
+                print(f"  [!] GPT failed for {name}: {gpt_err}")
                 continue
 
             report["company"]  = name
@@ -1981,9 +1981,9 @@ def prospect():
             enrichment = extract_enrichment(website_pages, social_links)
             try:
                 push_to_airtable(report, enrichment, website_url=site, location=location)
-                print(f"  ✓ Airtable push for {name}", flush=True)
+                print(f"  [OK] Airtable push for {name}", flush=True)
             except Exception as at_err:
-                print(f"  ⚠ Airtable push failed for {name}: {at_err}")
+                print(f"  [!] Airtable push failed for {name}: {at_err}")
 
             analyzed.append({
                 "business_name":        name,
@@ -1999,11 +1999,11 @@ def prospect():
             time.sleep(1)
 
         except Exception as e:
-            print(f"  ✗ Failed: {biz.get('business_name')}: {e}")
+            print(f"  [X] Failed: {biz.get('business_name')}: {e}")
             continue
 
     analyzed.sort(key=lambda x: x["overall_score"])
-    print(f"  ✓ Prospect run complete: {len(analyzed)} analyzed", flush=True)
+    print(f"  [OK] Prospect run complete: {len(analyzed)} analyzed", flush=True)
 
     return jsonify({"niche": niche, "location": location, "count": len(analyzed), "leads": analyzed})
 
