@@ -1714,6 +1714,10 @@ def calculate_score(report):
     if "strong brand" in text: score += 10
     if "good presence" in text: score += 10
     if "high engagement" in text: score += 10
+    rating = report.get("rating", 0)
+    reviews = report.get("review_count", 0)
+    if rating and rating < 4.0: score -= 10
+    if reviews and reviews < 50: score -= 10
     return max(10, min(score, 90))
 
 def get_primary_problem(report):
@@ -1758,6 +1762,98 @@ def recommend_saas(report):
             final.append(r)
             seen.add(r["tool"])
     return final[:2]
+def search_google_places(niche, location, limit=10):
+    import requests as req
+    key = os.environ.get("GOOGLE_PLACES_KEY", "")
+    if not key:
+        return []
+    try:
+        r = req.get(
+            "https://maps.googleapis.com/maps/api/place/textsearch/json",
+            params={"query": f"{niche} in {location}", "key": key, "type": "establishment"},
+            timeout=8
+        )
+        results = []
+        for p in r.json().get("results", [])[:limit]:
+            name     = p.get("name", "").strip()
+            place_id = p.get("place_id", "")
+            if not name or len(name) < 3:
+                continue
+            website = ""
+            if place_id and len(results) < 5:
+                try:
+                    det = req.get(
+                        "https://maps.googleapis.com/maps/api/place/details/json",
+                        params={"place_id": place_id, "fields": "website,formatted_phone_number", "key": key},
+                        timeout=5
+                    ).json()
+                    website = det.get("result", {}).get("website", "")
+                except:
+                    pass
+            results.append({
+                "business_name": name,
+                "website":       website or f"https://www.google.com/search?q={name.replace(' ', '+')}+{location.replace(' ', '+')}",
+                "platform":      "google_places",
+                "location":      location,
+                "industry":      niche,
+                "address":       p.get("formatted_address", ""),
+                "rating":        p.get("rating", 0),
+                "review_count":  p.get("user_ratings_total", 0),
+            })
+            time.sleep(1)
+        print(f"  → Google Places: {len(results)} results")
+        return results
+    except Exception as e:
+        print(f"  ⚠ Google Places failed: {e}")
+        return []
+
+
+def search_geoapify(niche, location, limit=10):
+    import requests as req
+    key = os.environ.get("GEOAPIFY_KEY", "")
+    if not key:
+        return []
+    try:
+        geo = req.get(
+            "https://api.geoapify.com/v1/geocode/search",
+            params={"text": location, "apiKey": key, "limit": 1},
+            timeout=5
+        ).json()
+        features = geo.get("features", [])
+        if not features:
+            return []
+        lon, lat = features[0]["geometry"]["coordinates"]
+        r = req.get(
+            "https://api.geoapify.com/v2/places",
+            params={
+                "categories": "commercial.beauty_and_spa,commercial.health",
+                "filter":     f"circle:{lon},{lat},3000",
+                "limit":      limit,
+                "apiKey":     key,
+            },
+            timeout=8
+        ).json()
+        results = []
+        for f in r.get("features", []):
+            props = f.get("properties", {})
+            name  = props.get("name", "").strip()
+            if not name or len(name) < 3:
+                continue
+            results.append({
+                "business_name": name,
+                "website":       props.get("website", f"https://www.google.com/search?q={name.replace(' ', '+')}"),
+                "platform":      "geoapify",
+                "location":      location,
+                "industry":      niche,
+                "address":       props.get("formatted", ""),
+                "rating":        0,
+                "review_count":  0,
+            })
+        print(f"  → Geoapify: {len(results)} results")
+        return results
+    except Exception as e:
+        print(f"  ⚠ Geoapify failed: {e}")
+        return []
 
 
 # ─── /prospect ENDPOINT ───────────────────────────────────────────────────────
@@ -1789,42 +1885,54 @@ def prospect():
     results = []
     seen_names = set()
 
-    for platform, cfg in BOOKING_PLATFORMS.items():
-        domain = cfg["domain"]
-        queries = [
-            f'site:{domain} "{niche}" "{location}"',
-            f'site:{domain} {niche} {location}',
-        ]
-        for query in queries:
-            hits = search_web(query, max_results=5)
-            for r in hits:
-                url = r.get("url", "")
-                if domain not in url:
-                    continue
-                title = r.get("title", "").split("|")[0].split("-")[0].strip()
-                name_key = re.sub(r'[^a-z0-9]', '', (title + location).lower())[:20]
-                bad_title = title.lower()
-                if any(x in bad_title for x in [
-                    "near me", "top 20", "top 10", "top 30",
-                    "best", "directory", "list of", "search results", "guide"
-                ]):
-                    continue
-                bad_url = url.lower()
-                if any(x in bad_url for x in [
-                    "/search", "near-me", "top-", "best-"
-                ]):
-                    continue
-                if not name_key or name_key in seen_names:
-                    continue
-                seen_names.add(name_key)
-                results.append({"business_name": title, "website": url, "platform": platform, "location": location, "industry": niche})
-            if len(results) >= limit:
-                break
-        if len(results) >= limit:
-            break
+    raw = search_google_places(niche, location, limit=limit)
 
+    if not raw:
+        print("  → Google Places empty, trying Geoapify...")
+        raw = search_geoapify(niche, location, limit=limit)
+
+    if not raw:
+        print("  → Geoapify empty, falling back to booking platforms...")
+        for platform, cfg in BOOKING_PLATFORMS.items():
+            domain = cfg["domain"]
+            for query in [f'site:{domain} "{niche}" "{location}"', f'site:{domain} {niche} {location}']:
+                for r in search_web(query, max_results=5):
+                    url   = r.get("url", "")
+                    title = r.get("title", "").split("|")[0].split("-")[0].strip()
+                    if domain not in url:
+                        continue
+                    bad_title = title.lower()
+                    if any(x in bad_title for x in ["near me", "top 20", "top 10", "top 30", "best", "directory", "list of", "search results", "guide"]):
+                        continue
+                    bad_url = url.lower()
+                    if any(x in bad_url for x in ["/search", "near-me", "top-"]):
+                        continue
+                    raw.append({"business_name": title, "website": url, "platform": platform, "location": location, "industry": niche, "rating": 0, "review_count": 0})
+                if len(raw) >= limit:
+                    break
+            if len(raw) >= limit:
+                break
+
+    for biz in raw:
+        name_key = re.sub(r'[^a-z0-9]', '', biz["business_name"].lower())[:20]
+        if name_key and name_key not in seen_names:
+            seen_names.add(name_key)
+            results.append(biz)
+
+    results = results[:limit]
     print(f"  → Found {len(results)} businesses to analyze")
     sys.stdout.flush()
+
+    analyzed = []
+    for biz in results:
+        try:
+            name = biz["business_name"]
+            site = biz["website"]
+            if len(name) < 3 or "/" in name:
+                print(f"  ⚠ Skipping bad name: {name}")
+                continue
+            print(f"  → Analyzing: {name}")
+            sys.stdout.flush()
 
     analyzed = []
     for biz in results[:limit]:
