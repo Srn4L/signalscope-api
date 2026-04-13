@@ -691,6 +691,7 @@ def run_fast_pipeline(business_name, location, website_pages, social_text, socia
         social_presence_note += f"\nContent retrieved from: {_with_content}"
     prompt = textwrap.dedent(f"""
     You are a marketing analyst for small businesses. Be specific — never generic.
+    IMPORTANT: Return ONLY valid JSON. Your entire response must be JSON.
 
     BUSINESS: {business_name} ({location})
     {platform_hint}{social_presence_note}
@@ -1768,6 +1769,8 @@ def prospect():
                     continue
                 title = r.get("title", "").split("|")[0].split("-")[0].strip()
                 name_key = re.sub(r'[^a-z0-9]', '', (title + location).lower())[:20]
+                if any(x in title.lower() for x in ["near me", "top 20", "top 10", "best", "directory", "list of"]):
+    continue
                 if not name_key or name_key in seen_names:
                     continue
                 seen_names.add(name_key)
