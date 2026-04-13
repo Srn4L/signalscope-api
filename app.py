@@ -939,7 +939,7 @@ def push_to_hubspot(report, website_pages, social_links):
     weaknesses = report.get("weaknesses", [])
     comp_sigs  = report.get("competitive_signals", {})
 
-    note_body = f"""🤖 Yelhao Intelligence Report
+    note_body = f"""[Yelhao] Intelligence Report
 
 Business: {business_name}
 Location: {location}{f' | {address}' if address else ''}
