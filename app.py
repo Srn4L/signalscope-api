@@ -1922,18 +1922,6 @@ def prospect():
     results = results[:limit]
     print(f"  → Found {len(results)} businesses to analyze")
     sys.stdout.flush()
-
-    analyzed = []
-    for biz in results:
-        try:
-            name = biz["business_name"]
-            site = biz["website"]
-            if len(name) < 3 or "/" in name:
-                print(f"  ⚠ Skipping bad name: {name}")
-                continue
-            print(f"  → Analyzing: {name}")
-            sys.stdout.flush()
-
     analyzed = []
     for biz in results[:limit]:
         try:
