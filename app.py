@@ -688,7 +688,7 @@ def run_fast_pipeline(business_name, location, website_pages, social_text, socia
     if _with_content:
         social_presence_note += f"\nContent retrieved from: {_with_content}"
     prompt = textwrap.dedent(f"""
-    You are a marketing analyst for small businesses. Be specific — never generic.
+    You are a marketing analyst for small businesses. Be specific - never generic.
     IMPORTANT: Return ONLY valid JSON. Your entire response must be JSON.
 
     BUSINESS: {business_name} ({location})
