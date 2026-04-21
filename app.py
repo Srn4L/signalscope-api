@@ -1564,7 +1564,7 @@ def push_to_airtable(report, enrichment, website_url="", location="", hubspot_co
         "Key Weakness":     weaknesses[0] if weaknesses else "",
         "Top Experiment":   top_experiment,
         "Outreach Status":  "Not Started",
-        "Pipeline Stage ":  "New Lead",
+        "Pipeline Stage":  "New Lead",
         "Recommended SaaS": recommend_saas(weaknesses, top_experiment),
         "Hubspot Contact ID": hubspot_contact_id or "",
         "Salesforce Lead ID": salesforce_lead_id or "",
@@ -3189,7 +3189,14 @@ def prospect():
             report["overall_score"]       = calculate_score(report)
             report["primary_problem"]     = get_primary_problem(report)
             report["is_high_opportunity"] = report["overall_score"] < 45
-            report["recommended_saas"]    = recommend_saas(report)
+           weaknesses = report.get("weaknesses", [])
+experiments = report.get("experiments", [])
+
+top_experiment = ""
+if experiments:
+    top_experiment = max(experiments, key=lambda e: e.get("impact", 0)).get("experiment", "")
+
+report["recommended_saas"] = recommend_saas(weaknesses, top_experiment)
             
 
             enrichment = extract_enrichment(website_pages, social_links)
