@@ -3189,14 +3189,14 @@ def prospect():
             report["overall_score"]       = calculate_score(report)
             report["primary_problem"]     = get_primary_problem(report)
             report["is_high_opportunity"] = report["overall_score"] < 45
-           weaknesses = report.get("weaknesses", [])
-experiments = report.get("experiments", [])
+            weaknesses = report.get("weaknesses", [])
+            experiments = report.get("experiments", [])
 
-top_experiment = ""
-if experiments:
-    top_experiment = max(experiments, key=lambda e: e.get("impact", 0)).get("experiment", "")
+            top_experiment = ""
+            if experiments:
+               top_experiment = max(experiments, key=lambda e: e.get("impact", 0)).get("experiment", "")
 
-report["recommended_saas"] = recommend_saas(weaknesses, top_experiment)
+            report["recommended_saas"] = recommend_saas(weaknesses, top_experiment)
             
 
             enrichment = extract_enrichment(website_pages, social_links)
