@@ -4701,8 +4701,8 @@ def prospect():
             saved_count = 0
             for b in top_results:
                 score_reasons = b.get("score_reasons") or []
-              why_it_fits   = "; ".join(str(r) if isinstance(r, dict) else r for r in score_reasons) if score_reasons else None
-              problem       = str(score_reasons[0]) if score_reasons else None
+                why_it_fits   = "; ".join(str(r) if isinstance(r, dict) else r for r in score_reasons) if score_reasons else None
+                problem       = str(score_reasons[0]) if score_reasons else None
 
                 biz_id = upsert_business({
                     "name":                 b.get("business_name"),
