@@ -4505,6 +4505,7 @@ def prospect():
     }
     """
     body = request.get_json(force=True, silent=True) or {}
+    print(f"[DB DEBUG] _DB_AVAILABLE={_DB_AVAILABLE}", flush=True)
     is_demo = bool(body.get('demo'))
 
     if is_demo and not request.headers.get('X-Agent-Token'):
