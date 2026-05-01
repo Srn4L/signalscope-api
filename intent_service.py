@@ -221,11 +221,21 @@ def parse_user_intent(raw_query: str, explicit_fields: dict | None = None) -> di
                     location = full
                     break
 
+    _VALID_SERVICE_ANGLES = {
+        "content_creation", "short_form_video", "photography", "seo",
+        "website_redesign", "booking_conversion", "crm_follow_up",
+        "events_performance", "influencer_partnership", "local_partnership",
+        "paid_ads", "reputation_management", "general_outreach",
+    }
     # ── Extract problem signal ────────────────────────────────────────────────
     problem_signal: str | None    = None
-    service_angle:  str | None    = explicit_fields.get("mode")
+    # Only use explicit service_angle override — mode is not a service angle
+    service_angle: str | None = (
+        explicit_fields.get("service_angle")
+        if explicit_fields.get("service_angle") in _VALID_SERVICE_ANGLES
+        else None
+    )
     signal_preferences: list[str] = []
-
     for triggers, prob, angle in _PROBLEM_MAP:
         if any(t in haystack for t in triggers):
             problem_signal = prob
