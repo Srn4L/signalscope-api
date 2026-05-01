@@ -119,17 +119,30 @@ try:
         compute_opportunity_score,
         build_social_conversion_signals,
         build_business_value_insights,
+        classify_fetch_result,
+        build_discovery_verification_signals,
+        apply_saturation_rerank,
+        compute_opportunity_score_v2,
     )
     from contact_service import infer_best_contact_path, infer_service_angle
     from database_service import (
         get_opportunity_saturation,
         get_saturation_label,
         refresh_opportunity_saturation,
+        get_candidate_exposure_stats,
     )
     _INTEL_AVAILABLE = True
 except Exception as _intel_import_err:
     print(f"[WARN] intelligence services unavailable: {_intel_import_err}", flush=True)
     _INTEL_AVAILABLE = False
+ 
+# --- INTENT SERVICE (Phase 3 + 4) --------------------------------------------
+try:
+    from intent_service import parse_user_intent, build_niche_intelligence
+    _INTENT_AVAILABLE = True
+except Exception as _intent_import_err:
+    print(f"[WARN] intent_service unavailable: {_intent_import_err}", flush=True)
+    _INTENT_AVAILABLE = False"""
 
 app = Flask(__name__)
 
@@ -234,11 +247,17 @@ def init_clients():
 
 SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
 
+FETCH_CLASSIFICATIONS = {}  # url -> classify_fetch_result output; cleared per request
+# NEW
 def safe_get(url, timeout=10):
     """
     Fetch a URL safely. Uses ScraperAPI if key is configured (handles
     blocked sites, Cloudflare, JS-rendered pages). Falls back to direct
     requests if no key is set or ScraperAPI fails.
+
+    Return signature unchanged: (html_text | None, status_code | error_str).
+    Side-effect: writes to FETCH_CLASSIFICATIONS[url] so callers can
+    distinguish blocked/timeout from truly missing without changing their code.
     """
     # -- ScraperAPI (handles blocked sites) -----------------------------------
     if SCRAPER_API_KEY:
@@ -247,25 +266,106 @@ def safe_get(url, timeout=10):
                 f"http://api.scraperapi.com"
                 f"?api_key={SCRAPER_API_KEY}"
                 f"&url={quote(url, safe='')}"
-                f"&render=false"  # set True for JS-heavy sites (costs 5 credits)
+                f"&render=false"
             )
             r = req.get(proxy_url, timeout=timeout)
             r.raise_for_status()
+            FETCH_CLASSIFICATIONS[url] = {"source_status": "ok", "asset_state": "found"}
             return r.text, r.status_code
         except Exception as e:
             log_error("ScraperAPI fetch", e, url=url)
+            _code = getattr(getattr(e, "response", None), "status_code", None)
+            try:
+                _cls = classify_fetch_result(status_code=_code, error_message=str(e), url=url)
+            except Exception:
+                _cls = {"source_status": "error", "asset_state": "unknown"}
+            FETCH_CLASSIFICATIONS[url] = _cls
+            if _cls.get("source_status") in ("blocked", "timeout"):
+                print(f"[Fetch] blocked source: {url}", flush=True)
             # Fall through to direct request
 
     # -- Direct request fallback -----------------------------------------------
     try:
         r = req.get(url, headers=HEADERS, timeout=10)
         r.raise_for_status()
+        FETCH_CLASSIFICATIONS[url] = {"source_status": "ok", "asset_state": "found"}
         return r.text, r.status_code
     except Exception as e:
         log_error("Direct fetch", e, url=url)
+        _code = getattr(getattr(e, "response", None), "status_code", None)
+        try:
+            _cls = classify_fetch_result(status_code=_code, error_message=str(e), url=url)
+        except Exception:
+            _cls = {"source_status": "error", "asset_state": "unknown"}
+        FETCH_CLASSIFICATIONS[url] = _cls
+        if _cls.get("source_status") in ("blocked", "timeout"):
+            print(f"[Fetch] blocked source: {url}", flush=True)
         return None, str(e)
 
-def extract_text(html, max_chars=4000):
+"""def classify_safe_get(url: str, timeout: int = 10) -> dict:
+    """
+    Wrapper around safe_get() that returns structured status instead of raw (text, code).
+    Use this wherever callers need to distinguish blocked vs missing.
+ 
+    Returns:
+        {
+          "html":          str | None,
+          "status_code":   int | str | None,
+          "source_status": "ok|blocked|not_found|timeout|error|unknown",
+          "asset_state":   "found|missing|unknown|unverified",
+          "confidence_impact": "none|low|medium|high",
+          "plain_english": str,
+        }
+    """
+    html, status = safe_get(url, timeout=timeout)
+ 
+    # safe_get returns (None, str(error)) on failure — detect that
+    if isinstance(status, str) and not status.isdigit():
+        # It's an error string, not a numeric code
+        try:
+            classification = classify_fetch_result(
+                status_code=None,
+                error_message=status,
+                url=url,
+            )
+        except Exception:
+            classification = {
+                "source_status": "error",
+                "asset_state": "unknown",
+                "confidence_impact": "medium",
+                "plain_english": f"Fetch failed: {status[:80]}",
+            }
+    else:
+        try:
+            code = int(status) if status is not None else None
+        except (ValueError, TypeError):
+            code = None
+        try:
+            classification = classify_fetch_result(
+                status_code=code,
+                error_message=None if html else str(status),
+                url=url,
+            )
+        except Exception:
+            classification = {
+                "source_status": "ok" if html else "unknown",
+                "asset_state": "found" if html else "unknown",
+                "confidence_impact": "none" if html else "medium",
+                "plain_english": "Fetch classification unavailable.",
+            }
+ 
+    # Log blocked sources
+    if classification.get("source_status") == "blocked":
+        print(f"[Fetch] blocked source: {url}", flush=True)
+ 
+    return {
+        "html":           html,
+        "status_code":    status,
+        **classification,
+    }
+ 
+ 
+def extract_text(html, max_chars=4000):"""
     if not html: return ""
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script","style","nav","footer","noscript"]): tag.decompose()
@@ -2683,16 +2783,81 @@ def agent():
                 "niche":             industry,
                 "goal":              body.get("goal") or body.get("user_query") or "",
             }
-            _contact = infer_best_contact_path(_biz_payload, _ctx_payload)
+           """            _contact = infer_best_contact_path(_biz_payload, _ctx_payload)
             _signals = build_opportunity_signals(_biz_payload, _ctx_payload, {}, _contact)
-            _score   = compute_opportunity_score(
+ 
+            # Phase 6: compute score from FULL signals, not just social_conversion
+            _score_v1 = compute_opportunity_score(
                 _signals.get("social_conversion", {}), {}, _ctx_payload
             )
+            try:
+                _score_v2 = compute_opportunity_score_v2(_signals, {}, _ctx_payload)
+            except Exception as _sv2_err:
+                log_error("/agent score_v2", _sv2_err)
+                _score_v2 = _score_v1
+ 
             fast_report["opportunity_signals"]  = _signals
             fast_report["contact_intelligence"] = _contact
             fast_report["social_conversion"]    = _signals.get("social_conversion")
             fast_report["business_value"]       = _signals.get("business_value")
-            fast_report["opportunity_score_v2"] = _score
+            fast_report["opportunity_score_v2"] = _score_v2  # Phase 6: full-signal score
+ 
+            # Phase 2: Scout vs Analyze discovery verification
+            try:
+                _scout_ctx = {
+                    "website":              body.get("website"),
+                    "source":               body.get("source"),
+                    "platform":             body.get("platform"),
+                    "problem_detected":     body.get("problem_detected"),
+                    "opportunity_type":     body.get("opportunity_type"),
+                    "business_name":        business_name,
+                    "location":             location,
+                    "category":             industry,
+                    "instagram_url":        body.get("instagram"),
+                    "facebook_url":         body.get("facebook"),
+                    "tiktok":               body.get("tiktok"),
+                    "phone":                body.get("phone"),
+                    "email":                body.get("email"),
+                }
+                _analyze_ctx = {
+                    "website":              _biz_payload.get("website"),
+                    "instagram_url":        _biz_payload.get("instagram_url") or _biz_payload.get("instagram"),
+                    "facebook_url":         _biz_payload.get("facebook_url")  or _biz_payload.get("facebook"),
+                    "tiktok":               _biz_payload.get("tiktok"),
+                    "phone":                _biz_payload.get("phone"),
+                    "email":                _biz_payload.get("email"),
+                    "booking_url":          (_biz_payload.get("raw_data") or {}).get("booking_url"),
+                    "_blocked_sources": [
+                        u for u, cls in FETCH_CLASSIFICATIONS.items()
+                        if cls.get("source_status") in ("blocked", "timeout")
+                    ],
+                }
+                _disc_verify = build_discovery_verification_signals(
+                    _scout_ctx, _analyze_ctx, _biz_payload
+                )
+                fast_report["discovery_verification"] = _disc_verify
+                # Also nest inside opportunity_signals for convenience
+                if isinstance(fast_report.get("opportunity_signals"), dict):
+                    fast_report["opportunity_signals"]["discovery_verification"] = _disc_verify
+            except Exception as _dv_err:
+                log_error("/agent discovery_verification", _dv_err)
+ 
+            # Phase 4: niche intelligence
+            try:
+                _niche_ctx = {
+                    "user_role":         _ctx_payload.get("user_role"),
+                    "business_category": industry,
+                    "niche":             industry,
+                    "service_angle":     _signals.get("service_angle"),
+                    "problem_signal":    None,
+                    "mode":              objective_mode or body.get("mode"),
+                }
+                if _INTENT_AVAILABLE:
+                    fast_report["niche_intelligence"] = build_niche_intelligence(
+                        _niche_ctx, _biz_payload, _signals
+                    )
+            except Exception as _ni_err:
+                log_error("/agent niche_intelligence", _ni_err)"""
         except Exception as _intel_err:
             log_error("/agent intelligence layer", _intel_err, business_name=business_name)
 
@@ -4614,14 +4779,56 @@ def prospect():
     if mode not in MODE_WEIGHTS:
         mode = SCOUT_DEFAULT_MODE
 
+   """    # ── Phase 3 + 4: Intent parsing + niche intelligence ─────────────────────
+    # Raw query from frontend "What are you looking for?" field
+    raw_query = (
+        body.get("user_query")
+        or body.get("query")
+        or body.get("what_are_you_looking_for")
+        or body.get("description")
+        or body.get("niche")
+        or ""
+    )
+    input_intelligence = {}
+    niche_intelligence = {}
+ 
+    if _INTENT_AVAILABLE:
+        try:
+            explicit = {
+                "business_type": body.get("business_type"),
+                "location":      body.get("location"),
+                "user_role":     body.get("user_role"),
+                "mode":          mode,
+                "service_angle": body.get("service_angle"),
+            }
+            input_intelligence = parse_user_intent(raw_query, explicit)
+ 
+            # Override niche/location from intent if not explicitly provided
+            if not body.get("niche") and input_intelligence.get("business_category"):
+                niche = input_intelligence["business_category"]
+            if not body.get("location") and input_intelligence.get("location"):
+                location = input_intelligence["location"]
+ 
+            # Build context for niche intelligence
+            _niche_ctx = {
+                "user_role":       input_intelligence.get("user_role") or body.get("user_role"),
+                "business_category": niche,
+                "niche":           niche,
+                "service_angle":   input_intelligence.get("service_angle"),
+                "problem_signal":  input_intelligence.get("problem_signal"),
+                "mode":            mode,
+            }
+            niche_intelligence = build_niche_intelligence(_niche_ctx)
+        except Exception as _intent_err:
+            log_error("intent parsing", _intent_err)
+ 
     # Validate niche quality — warn but never block
     niche_validation = validate_niche(niche)
     if niche_validation["quality_score"] < 50:
         print(f"  [i] Low-quality niche: {niche} (score: {niche_validation['quality_score']})")
-
+ 
     print(f"  -> Scout [{mode}]: {niche} in {location}, r={radius_miles}mi, limit={limit}")
-    sys.stdout.flush()
-
+    sys.stdout.flush()"""
     fetch_limit = min(limit * 4, 60)  # overfetch then trim after scoring
     raw = []
 
@@ -4738,7 +4945,7 @@ def prospect():
         biz.update(score_data)
         scored.append(biz)
 
-    # Sort by opportunity_score first, then by quality tiebreakers so
+    """    # Sort by opportunity_score first, then by quality tiebreakers so
     # identical scores produce a meaningful ranking instead of clustering.
     # Tiebreakers: higher rating wins, then higher review_count, then
     # alphabetical name (neutral deterministic fallback).
@@ -4748,8 +4955,29 @@ def prospect():
         -(x.get("review_count") or 0),
         (x.get("business_name") or "").lower(),
     ))
-    top_results = scored[:limit]
-
+ 
+    # ── Phase 5: Saturation-aware reranking ───────────────────────────────────
+    ranking_strategy = {"type": "standard", "repeat_suppression_active": False}
+    if _INTEL_AVAILABLE and _DB_AVAILABLE:
+        try:
+            token_raw  = request.headers.get("X-Agent-Token", "")
+            _th        = hash_token(token_raw) if token_raw else None
+            expo_stats = get_candidate_exposure_stats(scored, _th)
+            _rerank_ctx = {
+                "user_role":   body.get("user_role"),
+                "mode":        mode,
+                "niche":       niche,
+            }
+            scored = apply_saturation_rerank(scored, expo_stats, _rerank_ctx)
+            ranking_strategy = {
+                "type":                    "saturation_aware",
+                "message":                 "Results are reranked to reduce repeated leads and surface lower-saturation opportunities.",
+                "repeat_suppression_active": True,
+            }
+        except Exception as _rerank_err:
+            log_error("saturation reranking", _rerank_err)
+ 
+    top_results = scored[:limit]"""
     print(f"  -> Ranked {len(scored)} candidates, returning top {len(top_results)} (mode={mode})")
     if top_results:
         for i, b in enumerate(top_results[:5], 1):
@@ -4830,16 +5058,19 @@ def prospect():
             "filters_applied":   hard_filters,
         })
 
-    return jsonify({
+    """    return jsonify({
         "niche":        niche,
         "location":     location,
         "mode":         mode,
         "radius_miles": radius_miles if radius_miles else None,
         "count":        len(results),
         "results":      results,
-        "niche_warning": niche_validation if niche_validation["quality_score"] < 50 else None,
-    })
-
+        "niche_warning":       niche_validation if niche_validation["quality_score"] < 50 else None,
+        "input_intelligence":  input_intelligence or None,
+        "niche_intelligence":  niche_intelligence or None,
+        "ranking_strategy":    ranking_strategy,
+    })"""
+ 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DATABASE HEALTH + INIT ROUTES  (Phase 1 — connectivity only)
