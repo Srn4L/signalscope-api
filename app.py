@@ -4963,10 +4963,13 @@ def prospect():
             token_raw  = request.headers.get("X-Agent-Token", "")
             _th        = hash_token(token_raw) if token_raw else None
             expo_stats = get_candidate_exposure_stats(scored, _th)
-            _rerank_ctx = {
-                "user_role":   body.get("user_role"),
-                "mode":        mode,
-                "niche":       niche,
+           _rerank_ctx = {
+                "user_role":     input_intelligence.get("user_role") or body.get("user_role"),
+                "mode":          mode,
+                "niche":         niche,
+                "problem_signal": input_intelligence.get("problem_signal"),
+                "service_angle":  input_intelligence.get("service_angle"),
+                "niche_key":      niche_intelligence.get("niche_key") if niche_intelligence else None,
             }
             scored = apply_saturation_rerank(scored, expo_stats, _rerank_ctx)
             ranking_strategy = {
