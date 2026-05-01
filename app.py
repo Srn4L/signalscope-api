@@ -142,7 +142,7 @@ try:
     _INTENT_AVAILABLE = True
 except Exception as _intent_import_err:
     print(f"[WARN] intent_service unavailable: {_intent_import_err}", flush=True)
-    _INTENT_AVAILABLE = False"""
+    _INTENT_AVAILABLE = False
 
 app = Flask(__name__)
 
@@ -365,10 +365,12 @@ def safe_get(url, timeout=10):
     }
  
  
-def extract_text(html, max_chars=4000):"""
-    if not html: return ""
+def extract_text(html, max_chars=4000):
+    if not html: 
+        return ""
     soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script","style","nav","footer","noscript"]): tag.decompose()
+    for tag in soup(["script","style","nav","footer","noscript"]): 
+        tag.decompose()
     text = soup.get_text(separator=" ", strip=True)
     return re.sub(r"\s+", " ", text)[:max_chars]
 
