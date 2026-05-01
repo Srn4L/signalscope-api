@@ -1,25 +1,25 @@
 """
-database_service.py — High-level DB helpers for Yelhao.
+database_service.py - High-level DB helpers for Yelhao.
 
 All functions use get_db_session() from db.py and raw SQL / SQLAlchemy core.
-No ORM models are defined here — keeping it lightweight.
+No ORM models are defined here - keeping it lightweight.
 
 Functions
 ---------
 init_db()
-save_search(search_data)                          — token_hash aware
+save_search(search_data)                          - token_hash aware
 upsert_business(business_data)
 save_opportunity(opportunity_data)
-create_opportunity_state(opportunity_id, ...)     — token_hash aware
-update_opportunity_state(opportunity_id, updates) — legacy, kept for compat
-update_opportunity_status(opportunity_id, ...)    — token_hash scoped
+create_opportunity_state(opportunity_id, ...)     - token_hash aware
+update_opportunity_state(opportunity_id, updates) - legacy, kept for compat
+update_opportunity_status(opportunity_id, ...)    - token_hash scoped
 mark_do_not_contact(business_id, ...)
-get_followups_due(token_hash)                     — token_hash filtered
-get_saved_opportunities()                         — legacy, unscoped
-get_opportunities(..., token_hash)                — token_hash filtered
+get_followups_due(token_hash)                     - token_hash filtered
+get_saved_opportunities()                         - legacy, unscoped
+get_opportunities(..., token_hash)                - token_hash filtered
 get_opportunity_by_id(opportunity_id)
-log_discovery_event(...)                          — Scout discovery tracking
-save_scout_result_to_network(result_data, ...)    — manual Network save
+log_discovery_event(...)                          - Scout discovery tracking
+save_scout_result_to_network(result_data, ...)    - manual Network save
 """
 
 import json
@@ -75,7 +75,7 @@ def init_db():
 def save_search(search_data: dict) -> int | None:
     """
     Insert a row into searches and return the new id.
-    token_hash is None-safe — old callers that don't pass it are unaffected.
+    token_hash is None-safe - old callers that don't pass it are unaffected.
     """
     sql = text("""
         INSERT INTO searches
@@ -307,7 +307,7 @@ def create_opportunity_state(
 
 
 # ---------------------------------------------------------------------------
-# update_opportunity_state  (legacy — not token-scoped)
+# update_opportunity_state  (legacy - not token-scoped)
 # ---------------------------------------------------------------------------
 
 def update_opportunity_state(opportunity_id: int, updates: dict) -> bool:
@@ -394,7 +394,7 @@ def get_followups_due(token_hash: str = None) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# get_saved_opportunities  (legacy — unscoped)
+# get_saved_opportunities  (legacy - unscoped)
 # ---------------------------------------------------------------------------
 
 def get_saved_opportunities() -> list[dict]:
@@ -431,7 +431,7 @@ def get_saved_opportunities() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# get_opportunities  (Networks dashboard — token-scoped)
+# get_opportunities  (Networks dashboard - token-scoped)
 # ---------------------------------------------------------------------------
 
 def get_opportunities(
@@ -446,7 +446,7 @@ def get_opportunities(
     Return this token's saved Network opportunities.
 
     Uses JOIN (not LEFT JOIN) on opportunity_states so only rows where
-    os.token_hash matches are returned — that's the user isolation mechanism.
+    os.token_hash matches are returned - that's the user isolation mechanism.
     """
     where_clauses = []
     params = {"limit": limit, "offset": offset}
@@ -683,7 +683,7 @@ def update_opportunity_status(
         print(f"[DB] update_opportunity_status error: {exc}", flush=True)
         raise
 
-    # Saturation refresh — runs AFTER the session closes, BEFORE returning
+    # Saturation refresh - runs AFTER the session closes, BEFORE returning
     _action_statuses = {"contacted", "replied", "won", "lost"}
     if new_status in _action_statuses:
         try:
@@ -721,7 +721,7 @@ def log_discovery_event(
 ) -> bool:
     """
     Record that a business was shown in a Scout result for this token.
-    Does NOT create opportunities or states — discovery tracking only.
+    Does NOT create opportunities or states - discovery tracking only.
     """
     sql = text("""
         INSERT INTO discovery_events
@@ -837,7 +837,7 @@ def save_scout_result_to_network(result_data: dict, token_hash: str) -> dict:
             except Exception as _intel_err:
                 print(f"[DB] intel inference skipped: {_intel_err}", flush=True)
 
-        # 2. Duplicate check — now includes service_angle for finer granularity
+        # 2. Duplicate check - now includes service_angle for finer granularity
         with get_db_session() as session:
             dup_params = {"biz_id": biz_id, "mode": mode, "th": token_hash}
             if service_angle:
@@ -923,7 +923,7 @@ def save_scout_result_to_network(result_data: dict, token_hash: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# PHASE 4 ADDITIONS — saturation helpers
+# PHASE 4 ADDITIONS - saturation helpers
 # ---------------------------------------------------------------------------
 
 def refresh_opportunity_saturation(
@@ -1119,14 +1119,14 @@ def get_saturation_label(saturation: dict) -> dict:
         label = "Medium Saturation"
         summary = (
             f"{saves} save(s), {contacted} contacted, {replied} replied. "
-            "Some outreach has happened — differentiate your approach."
+            "Some outreach has happened - differentiate your approach."
         )
     else:
         level = "high"
         label = "High Saturation"
         summary = (
             f"{saves} saves, {contacted} contacted, {won} won for this combination. "
-            "This angle and contact path is crowded — try a different approach."
+            "This angle and contact path is crowded - try a different approach."
         )
 
     # Suggest open angles based on current saturation type
@@ -1146,7 +1146,7 @@ def get_saturation_label(saturation: dict) -> dict:
     # Contact warning
     contact_warning = ""
     if level == "high" and method == "instagram_dm":
-        contact_warning = "Instagram DM is saturated for this business — try email, phone, or website contact form instead."
+        contact_warning = "Instagram DM is saturated for this business - try email, phone, or website contact form instead."
     elif level == "high":
         contact_warning = f"{method} has been used frequently for this angle. Consider a different contact path."
 
@@ -1167,7 +1167,7 @@ def get_saturation_label(saturation: dict) -> dict:
         "contact_warning": contact_warning,
     }
 """
-PHASE 5 ADDITION — append this function to the bottom of database_service.py.
+PHASE 5 ADDITION - append this function to the bottom of database_service.py.
 
 Add `import re` at the top of database_service.py if it isn't already present.
 """
@@ -1355,5 +1355,5 @@ def get_candidate_exposure_stats(
 
     except Exception as exc:
         print(f"[DB] get_candidate_exposure_stats error: {exc}", flush=True)
-        # Safe fallback — don't let a DB error break Scout
+        # Safe fallback - don't let a DB error break Scout
         return {_norm_key(c): {**empty_stats} for c in candidates}
