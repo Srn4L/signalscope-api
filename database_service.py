@@ -1166,3 +1166,194 @@ def get_saturation_label(saturation: dict) -> dict:
         "open_angles":     open_angles,
         "contact_warning": contact_warning,
     }
+"""
+PHASE 5 ADDITION — append this function to the bottom of database_service.py.
+
+Add `import re` at the top of database_service.py if it isn't already present.
+"""
+
+import re as _re  # alias to avoid clobbering any existing `re` import
+
+
+def get_candidate_exposure_stats(
+    candidates: list[dict],
+    token_hash: str | None = None,
+) -> dict:
+    """
+    Return per-candidate exposure statistics keyed by "normalized_name|location".
+
+    Uses discovery_events (Scout tracking) and opportunity_states (Network saves/contacts).
+    Falls back gracefully to empty stats if DB is unavailable or query fails.
+
+    Args:
+        candidates: List of business dicts (need business_name or name + location).
+        token_hash: Current user's token hash for per-user exposure counts.
+
+    Returns:
+        {
+          "normalized_name|location": {
+            "seen_count_for_token":       int,
+            "seen_count_global":          int,
+            "last_seen_at_for_token":     str | None,
+            "already_saved_by_token":     bool,
+            "already_contacted_by_token": bool,
+          },
+          ...
+        }
+    """
+    if not candidates:
+        return {}
+
+    def _norm_key(c: dict) -> str:
+        name = _re.sub(
+            r"[^a-z0-9]", "",
+            (c.get("business_name") or c.get("name") or "").lower()
+        )[:20]
+        loc = (c.get("location") or "").lower().strip()
+        return f"{name}|{loc}"
+
+    # Build empty-stats fallback
+    empty_stats = {
+        "seen_count_for_token":       0,
+        "seen_count_global":          0,
+        "last_seen_at_for_token":     None,
+        "already_saved_by_token":     False,
+        "already_contacted_by_token": False,
+    }
+
+    name_list = list(set(
+        (c.get("business_name") or c.get("name") or "").strip()
+        for c in candidates
+        if (c.get("business_name") or c.get("name") or "").strip()
+    ))
+
+    if not name_list:
+        return {}
+
+    result: dict = {}
+
+    try:
+        with get_db_session() as session:
+            # ── Match businesses by name ──────────────────────────────────────
+            placeholders = ", ".join([f":n{i}" for i in range(len(name_list))])
+            params       = {f"n{i}": n for i, n in enumerate(name_list)}
+
+            # NEW
+            biz_rows = session.execute(
+                text(f"SELECT id, name, location FROM businesses WHERE name IN ({placeholders})"),
+                params,
+            ).fetchall()
+
+            # normalized_name -> {id, location}
+            biz_lookup: dict[str, dict] = {}
+            for row in biz_rows:
+                nk = _re.sub(r"[^a-z0-9]", "", (row[1] or "").lower())[:20]
+                biz_lookup[nk] = {"id": row[0], "location": row[2]}
+
+            # Fallback: if exact match found nothing, try normalized match
+            # against recent businesses (bounded to 500 rows)
+            if not biz_lookup:
+                recent_rows = session.execute(
+                    text("""
+                        SELECT id, name, location FROM businesses
+                        ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST
+                        LIMIT 500
+                    """)
+                ).fetchall()
+                for row in recent_rows:
+                    nk = _re.sub(r"[^a-z0-9]", "", (row[1] or "").lower())[:20]
+                    if nk and nk not in biz_lookup:
+                        biz_lookup[nk] = {"id": row[0], "location": row[2]}
+
+            if not biz_lookup:
+                return {_norm_key(c): {**empty_stats} for c in candidates}
+            biz_ids = [v["id"] for v in biz_lookup.values()]
+            id_pl   = ", ".join([f":bid{i}" for i in range(len(biz_ids))])
+            id_prm  = {f"bid{i}": bid for i, bid in enumerate(biz_ids)}
+
+            # ── Global discovery counts ───────────────────────────────────────
+            global_counts: dict[int, dict] = {}
+            rows = session.execute(
+                text(f"""
+                    SELECT business_id, COUNT(*) AS cnt, MAX(shown_at) AS last_shown
+                    FROM   discovery_events
+                    WHERE  business_id IN ({id_pl})
+                    GROUP  BY business_id
+                """),
+                id_prm,
+            ).fetchall()
+            for row in rows:
+                global_counts[row[0]] = {"count": row[1], "last_shown": row[2]}
+
+            # ── Token-scoped counts ───────────────────────────────────────────
+            token_counts:    dict[int, dict] = {}
+            token_saved:     dict[int, bool] = {}
+            token_contacted: dict[int, bool] = {}
+
+            if token_hash:
+                t_prm = {**id_prm, "token": token_hash}
+
+                t_rows = session.execute(
+                    text(f"""
+                        SELECT business_id, COUNT(*) AS cnt, MAX(shown_at) AS last_shown
+                        FROM   discovery_events
+                        WHERE  business_id IN ({id_pl})
+                        AND    token_hash = :token
+                        GROUP  BY business_id
+                    """),
+                    t_prm,
+                ).fetchall()
+                for row in t_rows:
+                    token_counts[row[0]] = {"count": row[1], "last_shown": row[2]}
+
+                # Saved / contacted from opportunity_states
+                state_rows = session.execute(
+                    text(f"""
+                        SELECT o.business_id, os.status
+                        FROM   opportunity_states os
+                        JOIN   opportunities o ON o.id = os.opportunity_id
+                        WHERE  o.business_id IN ({id_pl})
+                        AND    os.token_hash = :token
+                    """),
+                    t_prm,
+                ).fetchall()
+                for row in state_rows:
+                    bid    = row[0]
+                    status = (row[1] or "").lower()
+                    if "save" in status:
+                        token_saved[bid] = True
+                    if "contact" in status:
+                        token_contacted[bid] = True
+
+            # ── Build result dict ─────────────────────────────────────────────
+            for c in candidates:
+                key = _norm_key(c)
+                nk  = _re.sub(r"[^a-z0-9]", "", (c.get("business_name") or c.get("name") or "").lower())[:20]
+                biz = biz_lookup.get(nk)
+
+                if not biz:
+                    result[key] = {**empty_stats}
+                    continue
+
+                bid = biz["id"]
+                gc  = global_counts.get(bid, {})
+                tc  = token_counts.get(bid,  {})
+
+                result[key] = {
+                    "seen_count_for_token":       tc.get("count", 0),
+                    "seen_count_global":          gc.get("count", 0),
+                    "last_seen_at_for_token":     str(tc["last_shown"]) if tc.get("last_shown") else None,
+                    "already_saved_by_token":     bool(token_saved.get(bid, False)),
+                    "already_contacted_by_token": bool(token_contacted.get(bid, False)),
+                }
+
+        print(
+            f"[Rerank] exposure stats loaded for {len(result)} candidates",
+            flush=True,
+        )
+        return result
+
+    except Exception as exc:
+        print(f"[DB] get_candidate_exposure_stats error: {exc}", flush=True)
+        # Safe fallback — don't let a DB error break Scout
+        return {_norm_key(c): {**empty_stats} for c in candidates}
