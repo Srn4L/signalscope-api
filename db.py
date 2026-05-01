@@ -1,12 +1,12 @@
 """
-db.py — Database connection layer for Yelhao backend.
+db.py - Database connection layer for Yelhao backend.
 
 Reads DATABASE_URL from environment, normalises postgres:// → postgresql://,
 creates a SQLAlchemy engine and a sessionmaker, and exposes two thin helpers:
 
-    get_db_session()   — context manager that yields a session and handles
+    get_db_session()   - context manager that yields a session and handles
                           commit / rollback / close automatically.
-    test_connection()  — quick connectivity check; returns (True, None) or
+    test_connection()  - quick connectivity check; returns (True, None) or
                           (False, error_string).
 
 Nothing in this file imports from app.py, so it is safe to import anywhere.
@@ -32,7 +32,7 @@ else:
     DATABASE_URL = _raw_url
 
 # ---------------------------------------------------------------------------
-# 2. Engine — created lazily so import doesn't blow up if URL is missing
+# 2. Engine - created lazily so import doesn't blow up if URL is missing
 # ---------------------------------------------------------------------------
 
 _engine = None
@@ -105,8 +105,8 @@ def test_connection():
     Run a trivial query to verify the database is reachable.
 
     Returns:
-        (True,  None)          — connected OK
-        (False, error_string)  — connection failed
+        (True,  None)          - connected OK
+        (False, error_string)  - connection failed
     """
     try:
         with get_db_session() as session:
