@@ -1,4 +1,4 @@
-"""
+'''
 SignalScope Backend - /agent endpoint
 =====================================
 Add this to your existing Flask app on signalscope-api.onrender.com
@@ -11,7 +11,7 @@ Install:
 Env vars on Render:
   OPENAI_API_KEY
   ANTHROPIC_API_KEY
-"""
+'''
 
 import os
 import re
@@ -40,12 +40,12 @@ CACHE     = {}          # key -> (response_data, timestamp)
 CACHE_TTL = 86400       # 24 hours in seconds
 
 def cache_key(business_name, website_url, location):
-    """Build a consistent cache key."""
+    '''Build a consistent cache key.'''
     base = f"{business_name.lower().strip()}:{location.lower().strip()}:{website_url.lower().strip()}"
     return re.sub(r'[^a-z0-9:.]', '_', base)[:120]
 
 def get_cached(key):
-    """Return cached response if still fresh, else None."""
+    '''Return cached response if still fresh, else None.'''
     if key in CACHE:
         data, ts = CACHE[key]
         if time.time() - ts < CACHE_TTL:
@@ -54,7 +54,7 @@ def get_cached(key):
     return None
 
 def set_cache(key, data):
-    """Store response in cache."""
+    '''Store response in cache.'''
     CACHE[key] = (data, time.time())
 
 # --- BACKGROUND JOBS ----------------------------------------------------------
@@ -64,7 +64,7 @@ JOBS = {}  # job_id -> {"status": "running|done|error", "result": ..., "error": 
 JOBS_TTL = 600  # clean up finished jobs after 10 minutes
 
 def cleanup_jobs():
-    """Remove finished/errored jobs older than JOBS_TTL to prevent memory drift."""
+    '''Remove finished/errored jobs older than JOBS_TTL to prevent memory drift.'''
     now = time.time()
     stale = [k for k, v in JOBS.items()
              if v.get("status") in ("done","error") and now - v.get("ts", now) > JOBS_TTL]
@@ -74,7 +74,7 @@ def cleanup_jobs():
 RATE_LIMIT_AGENT = 10  # requests per hour per user (master is exempt)
 
 def check_rate_limit(log, key, limit, window=3600):
-    """Return True if under limit, False if exceeded. key = ip or ip:token."""
+    '''Return True if under limit, False if exceeded. key = ip or ip:token.'''
     now = time.time()
     log[key] = [t for t in log[key] if now - t < window]
     if len(log[key]) >= limit:
@@ -151,10 +151,10 @@ app = Flask(__name__)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def log_error(context, error, **kwargs):
-    """
+    '''
     Centralized error logger. Makes silent failures visible.
     Usage: log_error("HubSpot sync", e, business_name=name, contact_id=cid)
-    """
+    '''
     import traceback
     error_msg = f"[ERROR] {context}: {str(error)}"
     if kwargs:
@@ -168,7 +168,7 @@ CORS(app)
 
 # --- TOKEN HASHING -----------------------------------------------------------
 def hash_token(raw: str) -> str:
-    """SHA-256 of the raw token - we never store the raw code."""
+    '''SHA-256 of the raw token - we never store the raw code.'''
     return hashlib.sha256((raw or "").strip().lower().encode()).hexdigest()
 
 def get_token_hash(req) -> str | None:
@@ -213,10 +213,10 @@ GUEST_SESSIONS = {}  # code -> first_validated_timestamp
 
 
 def get_code_type(req) -> str | None:
-    """
+    '''
     Read token ONLY from X-Agent-Token header.
     Returns "master", "guest", or None if invalid/missing/expired.
-    """
+    '''
     token = req.headers.get("X-Agent-Token", "").strip().lower()
     if not token:
         return None
@@ -250,7 +250,7 @@ SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
 FETCH_CLASSIFICATIONS = {}  # url -> classify_fetch_result output; cleared per request
 # NEW
 def safe_get(url, timeout=10):
-    """
+    '''
     Fetch a URL safely. Uses ScraperAPI if key is configured (handles
     blocked sites, Cloudflare, JS-rendered pages). Falls back to direct
     requests if no key is set or ScraperAPI fails.
@@ -258,7 +258,7 @@ def safe_get(url, timeout=10):
     Return signature unchanged: (html_text | None, status_code | error_str).
     Side-effect: writes to FETCH_CLASSIFICATIONS[url] so callers can
     distinguish blocked/timeout from truly missing without changing their code.
-    """
+    '''
     # -- ScraperAPI (handles blocked sites) -----------------------------------
     if SCRAPER_API_KEY:
         try:
@@ -302,8 +302,8 @@ def safe_get(url, timeout=10):
             print(f"[Fetch] blocked source: {url}", flush=True)
         return None, str(e)
 
-"""def classify_safe_get(url: str, timeout: int = 10) -> dict:
-    """
+'''def classify_safe_get(url: str, timeout: int = 10) -> dict:
+    '''
     Wrapper around safe_get() that returns structured status instead of raw (text, code).
     Use this wherever callers need to distinguish blocked vs missing.
  
@@ -316,7 +316,7 @@ def safe_get(url, timeout=10):
           "confidence_impact": "none|low|medium|high",
           "plain_english": str,
         }
-    """
+    '''
     html, status = safe_get(url, timeout=timeout)
  
     # safe_get returns (None, str(error)) on failure - detect that
@@ -375,7 +375,7 @@ def extract_text(html, max_chars=4000):
     return re.sub(r"\s+", " ", text)[:max_chars]
 
 def extract_social_metadata(html):
-    """Extract OG metadata from social pages - works even when full text is blocked."""
+    '''Extract OG metadata from social pages - works even when full text is blocked.'''
     if not html: return {}
     soup = BeautifulSoup(html, "html.parser")
     data = {}
@@ -390,13 +390,13 @@ def extract_social_metadata(html):
     return data
 
 def find_social_links(html):
-    """
+    '''
     Aggressively find social links from:
     1. <a href> attributes (primary)
     2. Raw HTML text (catches JS-rendered or data-* embedded links)
     3. <script> tag content (catches social embeds)
     4. Meta tags (og:url, etc.)
-    """
+    '''
     if not html: return {}
     found = {}
 
@@ -411,7 +411,7 @@ def find_social_links(html):
     }
 
     def _normalize(url, platform, pat):
-        """Return clean full URL for a matched social link."""
+        '''Return clean full URL for a matched social link.'''
         if url.startswith("http"):
             # Clean tracking params
             return url.split("?")[0].rstrip("/")
@@ -487,10 +487,10 @@ def find_social_links(html):
 SERP_API_KEY = os.environ.get("SERP_API_KEY", "")
 
 def search_web(query, max_results=6):
-    """
+    '''
     Primary: SerpAPI (Google results - better quality, fresher, more accurate)
     Fallback: DuckDuckGo (free, no key required)
-    """
+    '''
     # -- SerpAPI (Google) ------------------------------------------------------
     if SERP_API_KEY:
         try:
@@ -551,7 +551,7 @@ SERVICE_KEYWORDS = [
 ]
 
 def parse_booking_card(html, platform, url):
-    """Extract pricing, rating, services from a booking platform page."""
+    '''Extract pricing, rating, services from a booking platform page.'''
     if not html:
         return None
     soup = BeautifulSoup(html, "html.parser")
@@ -632,10 +632,10 @@ def parse_booking_card(html, platform, url):
 
 
 def scrape_booking_competitors(business_name, industry, location, limit=5):
-    """
+    '''
     Search all 6 booking platforms for local competitors.
     Returns a list of competitor cards with pricing, ratings, and services.
-    """
+    '''
     print(f"  -> Booking platforms: searching {industry or business_name} in {location}...")
 
     service_hint = industry or business_name
@@ -714,7 +714,7 @@ def scrape_booking_competitors(business_name, industry, location, limit=5):
 
 
 def format_booking_intelligence(cards):
-    """Format booking cards into a rich text block for the AI pipeline."""
+    '''Format booking cards into a rich text block for the AI pipeline.'''
     if not cards:
         return ""
 
@@ -753,7 +753,7 @@ def format_booking_intelligence(cards):
 # -- IDENTITY-LED DISCOVERY (fallback when no website/social provided) --------
 
 def discover_business_signals(business_name, location, industry=""):
-    """
+    '''
     Identity-led fallback: discover public signals when no direct URL is provided.
     Used when Scout finds a business with weak/absent digital presence.
 
@@ -761,7 +761,7 @@ def discover_business_signals(business_name, location, industry=""):
         website, rating, review_count, social_links, review_snippets,
         confidence (low|medium|high)
     }
-    """
+    '''
     signals = {
         "website": "",
         "rating": 0,
@@ -1024,11 +1024,11 @@ def build_data_quality(website_pages, social_text, review_text, competitors):
     }
 
 def run_fast_pipeline(business_name, location, website_pages, social_text, social_links=None):
-    """
+    '''
     Fast GPT-only pass using just homepage + social signals.
     Returns a basic report in 3-8 seconds.
     Used as the immediate response while deep analysis runs in background.
-    """
+    '''
     import textwrap
     raw = {
         "website_pages": {k: v[:1200] for k, v in list(website_pages.items())[:2]},
@@ -1045,7 +1045,7 @@ def run_fast_pipeline(business_name, location, website_pages, social_text, socia
         social_presence_note = f"\nNOTE: Content scraping blocked for {_blocked} - treat as ACTIVE but unverified. Do NOT say 'no social presence'. State they have {_known} presence with limited visible content."
     if _with_content:
         social_presence_note += f"\nContent retrieved from: {_with_content}"
-    prompt = textwrap.dedent(f"""
+    prompt = textwrap.dedent(f'''
     You are a marketing analyst for small businesses. Be specific - never generic.
     IMPORTANT: Return ONLY valid JSON. Your entire response must be JSON.
 
@@ -1096,7 +1096,7 @@ def run_fast_pipeline(business_name, location, website_pages, social_text, socia
       "ai_methodology_note": "Fast GPT pass - full multi-model analysis with competitor + trend intelligence loading."
     }}
     Replace ALL placeholder text with real analysis from the data above.
-    """)
+    ''')
     r = gpt_client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "user", "content": prompt}],
@@ -1108,10 +1108,10 @@ def run_fast_pipeline(business_name, location, website_pages, social_text, socia
 
 
 def extract_enrichment(website_pages, social_links, website_url=""):
-    """
+    '''
     Extract contact enrichment signals from scraped website content.
     Returns email, phone, booking platform, services found.
-    """
+    '''
     combined = " ".join(website_pages.values())
     enrichment = {}
 
@@ -1186,7 +1186,7 @@ def hs_headers():
     }
 
 def hs_find_contact(email=None, domain=None):
-    """Find contact by email first, fall back to website domain."""
+    '''Find contact by email first, fall back to website domain.'''
     if not HUBSPOT_TOKEN:
         return None
     try:
@@ -1218,7 +1218,7 @@ def hs_find_contact(email=None, domain=None):
     return None
 
 def hs_create_contact(business_name, email, website, instagram, location, niche, phone="", booking_platform=""):
-    """Create a new HubSpot contact for the business."""
+    '''Create a new HubSpot contact for the business.'''
     props = {
         "company":   business_name,
         "firstname": business_name,  # shows name instead of -- in HubSpot
@@ -1234,7 +1234,7 @@ def hs_create_contact(business_name, email, website, instagram, location, niche,
     return r.json().get("id")
 
 def hs_update_contact(contact_id, website, instagram, location, phone="", booking_platform=""):
-    """Update existing contact with latest signals."""
+    '''Update existing contact with latest signals.'''
     props = {}
     if website:          props["website"]       = website
     if location:         props["city"]          = location
@@ -1246,7 +1246,7 @@ def hs_update_contact(contact_id, website, instagram, location, phone="", bookin
             headers=hs_headers(), json={"properties": props}, timeout=10)
 
 def hs_create_deal(contact_id, business_name, priority_score):
-    """Create a deal linked to the contact."""
+    '''Create a deal linked to the contact.'''
     r = req.post(f"{HS_BASE}/crm/v3/objects/deals",
         headers=hs_headers(), json={
             "properties": {
@@ -1263,7 +1263,7 @@ def hs_create_deal(contact_id, business_name, priority_score):
     return r.json().get("id")
 
 def hs_create_note(contact_id, body):
-    """Attach a note to a contact using the modern CRM v3 Notes API."""
+    '''Attach a note to a contact using the modern CRM v3 Notes API.'''
     req.post(f"{HS_BASE}/crm/v3/objects/notes",
         headers=hs_headers(), json={
             "properties": {"hs_note_body": body},
@@ -1283,7 +1283,7 @@ SALESFORCE_INSTANCE_URL  = os.environ.get("SALESFORCE_INSTANCE_URL",  "").rstrip
 _SF_TOKEN_CACHE = {"access_token": None, "expires_at": 0}
 
 def sf_get_token():
-    """Client Credentials Flow - get access token, cached for ~55 min."""
+    '''Client Credentials Flow - get access token, cached for ~55 min.'''
     if not (SALESFORCE_CLIENT_ID and SALESFORCE_CLIENT_SECRET and SALESFORCE_INSTANCE_URL):
         return None
     now = time.time()
@@ -1313,7 +1313,7 @@ def sf_get_token():
 
 def sf_create_lead(business_name, email, website, phone, industry, location,
                    score, primary_problem, key_insight, priority_score):
-    """Create a Salesforce Lead record with standard fields."""
+    '''Create a Salesforce Lead record with standard fields.'''
     token = sf_get_token()
     if not token:
         return None
@@ -1413,7 +1413,7 @@ def sf_create_task(lead_id, subject, body):
 
 
 def sf_lead_exists(email, company_name):
-    """Check if a lead already exists in Salesforce by email or company name."""
+    '''Check if a lead already exists in Salesforce by email or company name.'''
     token = sf_get_token()
     if not token or not (email or company_name):
         return None
@@ -1449,10 +1449,10 @@ def sf_lead_exists(email, company_name):
 
 
 def push_to_salesforce(report, website_pages, social_links, website_url=""):
-    """
+    '''
     Pushes analyzed lead into Salesforce as a Lead record + outreach Task.
     Silent fail - never blocks the report. Returns lead_id.
-    """
+    '''
     if not (SALESFORCE_CLIENT_ID and SALESFORCE_CLIENT_SECRET and SALESFORCE_INSTANCE_URL):
         return None
 
@@ -1497,7 +1497,7 @@ def push_to_salesforce(report, website_pages, social_links, website_url=""):
 
 
 def hs_contact_exists(email, domain):
-    """Check if a contact already exists in HubSpot by email or domain."""
+    '''Check if a contact already exists in HubSpot by email or domain.'''
     if not HUBSPOT_TOKEN:
         return None
     if not email and not domain:
@@ -1533,11 +1533,11 @@ def hs_contact_exists(email, domain):
 
 
 def push_to_hubspot(report, website_pages, social_links):
-    """
+    '''
     Event-driven CRM sync - triggered automatically on deep job completion.
     Creates or updates contact, creates deal, logs AI-generated note.
     Silent fails - never blocks the report from returning to the user.
-    """
+    '''
     if not HUBSPOT_TOKEN:
         return
 
@@ -1573,7 +1573,7 @@ def push_to_hubspot(report, website_pages, social_links):
     weaknesses = report.get("weaknesses", [])
     comp_sigs  = report.get("competitive_signals", {})
 
-    note_body = f"""[Yelhao] Intelligence Report
+    note_body = f'''[Yelhao] Intelligence Report
 
 Business: {business_name}
 Location: {location}{f' | {address}' if address else ''}
@@ -1603,7 +1603,7 @@ OUTREACH ANGLE:
 PLATFORMS DETECTED:
 {", ".join(social_links.keys()) or "None detected"}
 --------------------------
-Generated by Yelhao AI . yelhoa.netlify.app"""
+Generated by Yelhao AI . yelhoa.netlify.app'''
 
     # Dedup: find by email -> fall back to domain
     contact_id = hs_find_contact(email=email or None, domain=website or None)
@@ -1635,7 +1635,7 @@ AIRTABLE_BASE_ID  = os.environ.get("AIRTABLE_BASE_ID", "")
 AIRTABLE_TABLE_ID = os.environ.get("AIRTABLE_TABLE_ID", "")
 
 def airtable_business_exists(business_name):
-    """Check if a business already exists in Airtable by name."""
+    '''Check if a business already exists in Airtable by name.'''
     if not AIRTABLE_TOKEN or not AIRTABLE_BASE_ID or not AIRTABLE_TABLE_ID:
         return False
     try:
@@ -1654,7 +1654,7 @@ def airtable_business_exists(business_name):
 
 
 def airtable_get_record_id(business_name):
-    """Get the record ID of an existing business in Airtable, or None if not found."""
+    '''Get the record ID of an existing business in Airtable, or None if not found.'''
     if not AIRTABLE_TOKEN or not AIRTABLE_BASE_ID or not AIRTABLE_TABLE_ID:
         return None
     try:
@@ -1674,7 +1674,7 @@ def airtable_get_record_id(business_name):
 
 
 def airtable_update_record(record_id, fields):
-    """Update an existing Airtable record with new field values."""
+    '''Update an existing Airtable record with new field values.'''
     if not AIRTABLE_TOKEN or not AIRTABLE_BASE_ID or not AIRTABLE_TABLE_ID or not record_id:
         return False
     # Remove empty values so we don't overwrite existing data with blanks
@@ -1754,7 +1754,7 @@ WEAKNESS_TO_SAAS = {
 }
 
 def recommend_saas(weaknesses, top_experiment=""):
-    """Maps detected weaknesses to 2-3 relevant SaaS tools. Returns comma-separated string."""
+    '''Maps detected weaknesses to 2-3 relevant SaaS tools. Returns comma-separated string.'''
     try:
         if not weaknesses:
             return ""
@@ -1795,11 +1795,11 @@ def recommend_saas(weaknesses, top_experiment=""):
 
 
 def push_to_airtable(report, enrichment, website_url="", location="", hubspot_contact_id=None, salesforce_lead_id=None, mode=None):
-    """
+    '''
     Creates a new row in Airtable Leads table after deep analysis completes.
     Skips if business already exists (dedup by name).
     Silent fail - never blocks the report from returning to the user.
-    """
+    '''
     if not AIRTABLE_TOKEN or not AIRTABLE_BASE_ID or not AIRTABLE_TABLE_ID:
         log_error("Airtable config", Exception("Missing env vars: AIRTABLE_TOKEN, BASE_ID, or TABLE_ID"))
         return
@@ -1935,7 +1935,7 @@ def push_to_airtable(report, enrichment, website_url="", location="", hubspot_co
     except Exception as e:
         log_error("Airtable create", e)
 def notify_n8n_after_analyze(business_name, location, report, opp_score, opp_confidence, opp_reasons):
-    """
+    '''
     Fires a POST to the n8n webhook after /analyze completes and Airtable is saved.
     n8n can then email or text the user with a summary of the saved business.
 
@@ -1945,7 +1945,7 @@ def notify_n8n_after_analyze(business_name, location, report, opp_score, opp_con
     n8n receives:
       event, business_name, location, opportunity_score, score_confidence,
       score_reasons, primary_problem, weaknesses, recommended_saas, website
-    """
+    '''
     webhook_url = os.environ.get("N8N_WEBHOOK_URL", "")
     if not webhook_url:
         return
@@ -1976,14 +1976,14 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
                  review_text, pricing_text, competitors, mode,
                  booking_cards, trend_data, ck, social_links=None, manual_email='',
                  objective_mode=None):
-    """
+    '''
     Runs in a background thread. Executes the full pipeline and stores result in JOBS.
     Also updates the cache when done.
 
     mode          = pipeline routing mode (multi_model / claude_only / gpt_only) - AI infrastructure only
     objective_mode = Scout intent (outreach / referral / partnership / acquisition / market / venture)
                      Optional. Passed through from /agent when triggered via Scout Deep Analyze.
-    """
+    '''
     try:
         JOBS[job_id]["step"] = "Analyzing signals with AI..."
         report = run_full_pipeline(
@@ -2082,12 +2082,12 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
 def run_full_pipeline(business_name, location, website_pages, social_text,
                       review_text, pricing_text, competitors, mode,
                       booking_cards=None, trend_data=None, social_links=None):
-    """
+    '''
     Three-stage multi-model pipeline:
       multi_model  -> GPT extract -> Claude analyze -> GPT validate+format
       claude_only  -> Claude direct analysis
       gpt_only     -> GPT single pass (thin data)
-    """
+    '''
     import textwrap
 
     raw_data = {
@@ -2104,7 +2104,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
     if mode == "multi_model":
 
         # Stage 1 - GPT: structured signal extraction
-        extract_prompt = textwrap.dedent(f"""
+        extract_prompt = textwrap.dedent(f'''
         You are a data extraction specialist. Extract structured marketing signals
         from the raw scraped data below. Return ONLY valid JSON - no markdown, no explanation.
 
@@ -2160,7 +2160,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
             "overall_confidence": "low|medium|high"
           }}
         }}
-        """)
+        ''')
 
         r1 = gpt_client.chat.completions.create(
             model="gpt-4o",
@@ -2178,7 +2178,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         _s_content  = [p for p in social_text if len(social_text.get(p,"")) > 100]
         _s_blocked  = [p for p in _s_detected if p not in _s_content]
 
-        claude_prompt = textwrap.dedent(f"""
+        claude_prompt = textwrap.dedent(f'''
         You are a senior growth strategist for small businesses. You have access to REAL market data.
 
         BUSINESS: {business_name} ({location})
@@ -2231,7 +2231,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         12. PLATFORM SCORES - 0-100 per platform detected or relevant
         13. REPUTATION - sentiment, specific review themes if found
         14. COVERAGE NOTES - honest about what data was thin or missing
-        """)
+        ''')
 
         r2 = claude_client.messages.create(
             model="claude-sonnet-4-20250514",
@@ -2272,7 +2272,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
             "ai_methodology_note": "str - mention 3-stage pipeline: GPT extraction + Claude analysis + GPT validation",
         }
 
-        format_prompt = textwrap.dedent(f"""
+        format_prompt = textwrap.dedent(f'''
         You are a JSON formatter and fact-checker for a marketing intelligence platform.
 
         TASK:
@@ -2301,7 +2301,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         - Only remove claims that directly contradict extracted signal data
         - Keep all competitor pricing references, trend names, and specific numbers
         - Be honest about data gaps in coverage_notes
-        """)
+        ''')
 
         r3 = gpt_client.chat.completions.create(
             model="gpt-4o",
@@ -2314,7 +2314,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
 
     # -- CLAUDE ONLY: direct analysis pass ------------------------------------
     elif mode == "claude_only":
-        prompt = textwrap.dedent(f"""
+        prompt = textwrap.dedent(f'''
         You are a senior marketing strategist. Analyze {business_name} ({location}).
         Return ONLY valid JSON - no markdown, no backticks.
 
@@ -2335,7 +2335,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         signal_confidence, coverage_notes, cover_letter_snippet, ai_methodology_note.
 
         Fill ALL fields with real analysis. Generate exactly 4 specific experiments.
-        """)
+        ''')
 
         r = claude_client.messages.create(
             model="claude-sonnet-4-20250514",
@@ -2349,7 +2349,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
 
     # -- GPT ONLY: single fast pass (thin data) --------------------------------
     else:
-        prompt = textwrap.dedent(f"""
+        prompt = textwrap.dedent(f'''
         You are a marketing analyst for small businesses. Be specific - never generic.
 
         BUSINESS: {business_name} ({location})
@@ -2372,7 +2372,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         cover_letter_snippet, ai_methodology_note.
 
         Generate 4 specific experiments triggered by actual signals in the data.
-        """)
+        ''')
 
         r = gpt_client.chat.completions.create(
             model="gpt-4o",
@@ -2386,7 +2386,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
 
 @app.route('/job/<job_id>', methods=['GET'])
 def job_status(job_id):
-    """Poll for deep analysis completion."""
+    '''Poll for deep analysis completion.'''
     job = JOBS.get(job_id)
     if not job:
         return jsonify({"status": "not_found"}), 404
@@ -2785,7 +2785,7 @@ def agent():
                 "niche":             industry,
                 "goal":              body.get("goal") or body.get("user_query") or "",
             }
-           """            _contact = infer_best_contact_path(_biz_payload, _ctx_payload)
+           '''            _contact = infer_best_contact_path(_biz_payload, _ctx_payload)
             _signals = build_opportunity_signals(_biz_payload, _ctx_payload, {}, _contact)
  
             # Phase 6: compute score from FULL signals, not just social_conversion
@@ -2859,7 +2859,7 @@ def agent():
                         _niche_ctx, _biz_payload, _signals
                     )
             except Exception as _ni_err:
-                log_error("/agent niche_intelligence", _ni_err)"""
+                log_error("/agent niche_intelligence", _ni_err)'''
         except Exception as _intel_err:
             log_error("/agent intelligence layer", _intel_err, business_name=business_name)
 
@@ -2883,7 +2883,7 @@ def agent():
 
 @app.route('/validate', methods=['POST'])
 def validate():
-    """Check if an access code is valid. Frontend calls this before unlocking."""
+    '''Check if an access code is valid. Frontend calls this before unlocking.'''
     ip = request.remote_addr
     if not check_rate_limit(VALIDATE_LOG, ip, RATE_LIMIT_VALIDATE):
         return jsonify({"valid": False, "code_type": None, "error": "Too many attempts"}), 429
@@ -3001,7 +3001,7 @@ def get_primary_problem(report):
 
 
 def confidence_from_data_quality(data_quality):
-    """Derive confidence level from data quality scores."""
+    '''Derive confidence level from data quality scores.'''
     if not data_quality:
         return "low"
     avg = sum(v.get("pct", 0) for v in data_quality.values()) / max(len(data_quality), 1)
@@ -3012,7 +3012,7 @@ def confidence_from_data_quality(data_quality):
     return "low"
 
 def build_metrics_meta(growth_metrics, confidence, source="industry_estimate"):
-    """Attach source and confidence to every metric."""
+    '''Attach source and confidence to every metric.'''
     return {
         "ltv":           {"value": growth_metrics["ltv"],          "source": source, "confidence": confidence},
         "cac":           {"value": growth_metrics["cac"],          "source": source, "confidence": confidence},
@@ -3024,11 +3024,11 @@ def build_metrics_meta(growth_metrics, confidence, source="industry_estimate"):
 
 
 def quick_instagram_check(business_name, website=None):
-    """
+    '''
     Lightweight Instagram presence check for prospect filtering.
     Returns follower count if found, 0 if not found or error.
     Used to filter out established businesses during prospecting.
-    """
+    '''
     try:
         # Try to find Instagram from website first (fastest)
         if website:
@@ -3170,10 +3170,10 @@ def _is_chain(name: str) -> bool:
 # ── Quality helpers ────────────────────────────────────────────────────────────
 
 def score_website_quality(candidate: dict) -> int:
-    """
+    '''
     0-100. Based on presence signals already in the pipeline.
     No external API calls.
-    """
+    '''
     score = 0
     website = candidate.get("website") or ""
     if not website or len(website) < 10:
@@ -3209,9 +3209,9 @@ def score_website_quality(candidate: dict) -> int:
 
 
 def score_social_activity(candidate: dict) -> int:
-    """
+    '''
     0-100. Degrades gracefully when social data is sparse (Scout path).
-    """
+    '''
     score = 0
 
     has_instagram = bool(candidate.get("instagram"))
@@ -3239,10 +3239,10 @@ def score_social_activity(candidate: dict) -> int:
 
 
 def score_reputation_strength(rating: float, review_count: int) -> int:
-    """
+    '''
     0-100. Both rating AND review count matter.
     Neither alone is sufficient - combines volume (demand proof) with quality.
-    """
+    '''
     if not rating and not review_count:
         return 0
 
@@ -3269,9 +3269,9 @@ def score_reputation_strength(rating: float, review_count: int) -> int:
 
 
 def score_contactability(candidate: dict) -> int:
-    """
+    '''
     0-100. Can we actually reach this business through a public channel?
-    """
+    '''
     score = 0
     has_website  = bool(candidate.get("website") and len(str(candidate.get("website") or "")) > 10)
     has_instagram = bool(candidate.get("instagram"))
@@ -3291,14 +3291,14 @@ def score_contactability(candidate: dict) -> int:
 # ── Structured signal builder ──────────────────────────────────────────────────
 
 def build_signals(candidate: dict, mode: str = "outreach") -> dict:
-    """
+    '''
     Builds a structured signal object from a candidate dict.
     Uses only data already present in the pipeline - no extra API calls.
 
     candidate keys consumed:
       rating, review_count, followers, website, platform, instagram,
       tiktok, facebook, email, description, business_name, industry
-    """
+    '''
     rating       = float(candidate.get("rating") or 0)
     review_count = int(candidate.get("review_count") or 0)
     followers    = int(candidate.get("followers") or 0)
@@ -3403,10 +3403,10 @@ def build_signals(candidate: dict, mode: str = "outreach") -> dict:
 # ── Sub-score computation ──────────────────────────────────────────────────────
 
 def compute_sub_scores(signals: dict, mode: str = "outreach") -> dict:
-    """
+    '''
     Converts structured signals into 6 weighted sub-scores (each 0-100).
     Final opportunity score is a mode-weighted blend of these.
-    """
+    '''
     rep   = signals["reputation"]
     pres  = signals["presence"]
     qual  = signals["quality"]
@@ -3497,13 +3497,13 @@ def compute_sub_scores(signals: dict, mode: str = "outreach") -> dict:
 # ── Reason generation: signal + implication ───────────────────────────────────
 
 def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) -> list:
-    """
+    '''
     Builds 3-5 score_reasons in signal + implication format.
     Format: { key, signal, impact, weight }
 
     Pattern: what we see → what it means for the user's objective.
     Avoids bare-fact reasons ("has website", "no social").
-    """
+    '''
     reasons = []
     rep  = signals["reputation"]
     pres = signals["presence"]
@@ -3705,10 +3705,10 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
 # ── Opportunity summary ────────────────────────────────────────────────────────
 
 def _build_opportunity_summary(signals: dict, sub_scores: dict, score: int, mode: str) -> str:
-    """
+    '''
     One short sentence summarising the opportunity in plain English.
     Varies by mode and signal combination.
-    """
+    '''
     rep   = signals["reputation"]
     pres  = signals["presence"]
     gaps  = signals["gaps"]
@@ -3773,11 +3773,11 @@ def _build_opportunity_summary(signals: dict, sub_scores: dict, score: int, mode
 # ── Goal → mode inference ─────────────────────────────────────────────────────
 
 def infer_objective_mode(goal: str) -> str:
-    """
+    '''
     Maps free-text goal to a controlled internal lens.
     Only called when no explicit mode is passed.
     Defaults safely to "outreach".
-    """
+    '''
     if not goal or not goal.strip():
         return "outreach"
 
@@ -3899,7 +3899,7 @@ SIGNAL_SCORE_WEIGHTS = {
 
 
 def compute_signal_scores(signals: dict, sub_scores: dict, mode: str = "outreach") -> dict:
-    """
+    '''
     Computes three parent signal scores (each 0-100):
       demand     - proof that real business/category demand exists
       gap        - size and fixability of the opportunity gap
@@ -3907,7 +3907,7 @@ def compute_signal_scores(signals: dict, sub_scores: dict, mode: str = "outreach
 
     Uses only data already present in signals + sub_scores.
     No additional API calls.
-    """
+    '''
     # Resolve legacy mode aliases
     parent_mode = _PARENT_MODE_ALIAS.get(mode, mode)
     if parent_mode not in SIGNAL_SCORE_WEIGHTS:
@@ -4023,10 +4023,10 @@ def compute_signal_scores(signals: dict, sub_scores: dict, mode: str = "outreach
 
 
 def _build_top_signal(signal_scores: dict, signals: dict, mode: str) -> str:
-    """
+    '''
     Returns one compact top_signal string per result.
     Picks the most important thing a user should notice at a glance.
-    """
+    '''
     demand     = signal_scores["demand"]
     gap        = signal_scores["gap"]
     conversion = signal_scores["conversion"]
@@ -4077,7 +4077,7 @@ def _build_top_signal(signal_scores: dict, signals: dict, mode: str) -> str:
 
 
 def score_and_explain(candidate: dict, mode: str, soft_preferences=None, exclusions=None) -> dict:
-    """
+    '''
     v3 scoring engine.
     Flow: build_signals → compute_sub_scores → compute_signal_scores → final blend
 
@@ -4086,7 +4086,7 @@ def score_and_explain(candidate: dict, mode: str, soft_preferences=None, exclusi
 
     Return shape preserves all existing frontend fields.
     Adds: signal_scores, top_signal, signals, sub_scores, opportunity_summary.
-    """
+    '''
     # Normalise mode - keep original for legacy routes, resolve alias for parent layer
     if mode not in SUBSCORE_WEIGHTS:
         mode = SCOUT_DEFAULT_MODE
@@ -4148,7 +4148,7 @@ def score_and_explain(candidate: dict, mode: str, soft_preferences=None, exclusi
 
 
 def apply_hard_filters(candidate, hard_filters):
-    """
+    '''
     Returns (passes: bool, reason: str).
     Hard filters are knockout - fail means excluded before scoring.
 
@@ -4156,7 +4156,7 @@ def apply_hard_filters(candidate, hard_filters):
       min_rating (float), review_ceiling (int),
       requires_website ("yes"/"no"/"either"),
       requires_booking ("yes"/"no"/"either")
-    """
+    '''
     if not hard_filters:
         return True, "passed"
 
@@ -4189,7 +4189,7 @@ def apply_hard_filters(candidate, hard_filters):
 
 
 def _looks_like_chain(name):
-    """Heuristic to detect franchise or chain names for exclusion."""
+    '''Heuristic to detect franchise or chain names for exclusion.'''
     chain_signals = [
         " corp", " corporation", " llc", " inc.", " group", " holdings",
         "great clips", "supercuts", "sport clips", "fantastic sams",
@@ -4211,10 +4211,10 @@ DEFAULT_FILTERS = {
 }
 
 def normalize_filters(raw):
-    """
+    '''
     Normalize filter values with type coercion and defaults.
     Ensures filters are always valid integers/floats, never None or invalid.
-    """
+    '''
     raw = raw or {}
     return {
         "max_reviews": int(raw.get("max_reviews", DEFAULT_FILTERS["max_reviews"]) or DEFAULT_FILTERS["max_reviews"]),
@@ -4286,10 +4286,10 @@ def get_niche_benchmarks(niche_str):
     return NICHE_BENCHMARKS['default']
 
 def estimate_growth_metrics(lead, niche=''):
-    """
+    '''
     Returns modeled LTV, CAC, payback period, and churn proxy.
     All figures are industry-benchmark estimates, not real data.
-    """
+    '''
     b = get_niche_benchmarks(niche)
 
     avg_ticket       = b['avg_ticket']
@@ -4509,10 +4509,10 @@ def get_niche_radius(niche):
 
 
 def geocode_business(business_name, address=None, location=None):
-    """
+    '''
     Returns (lat, lng) for a business using Google Geocoding API.
     Tries address first, falls back to business name + location.
-    """
+    '''
     key = os.environ.get('GOOGLE_PLACES_KEY', '')
     if not key:
         return None, None
@@ -4535,10 +4535,10 @@ def geocode_business(business_name, address=None, location=None):
 
 
 def nearby_competitors_google(lat, lng, niche, radius_m=1500, limit=8):
-    """
+    '''
     Uses Google Places Nearby Search to find actual nearby competitors.
     Returns structured competitor cards with real ratings, price level, and distance.
-    """
+    '''
     key = os.environ.get('GOOGLE_PLACES_KEY', '')
     if not key or not lat or not lng:
         return []
@@ -4599,7 +4599,7 @@ def nearby_competitors_google(lat, lng, niche, radius_m=1500, limit=8):
 
 
 def format_nearby_competitors(cards, target_rating=None, target_niche=''):
-    """Format nearby competitor cards for AI prompt injection."""
+    '''Format nearby competitor cards for AI prompt injection.'''
     if not cards:
         return ''
     lines = [f'NEARBY COMPETITOR INTELLIGENCE ({len(cards)} businesses within local radius):']
@@ -4672,10 +4672,10 @@ LOW_QUALITY_NICHES = [
 
 
 def validate_niche(niche_input):
-    """
+    '''
     Returns dict with: quality_score (0-100), category, suggestions, message
     Used to warn users when they enter niches outside Yelhao\'s sweet spot.
-    """
+    '''
     niche_lower = niche_input.lower().strip()
 
     # Check for low-quality patterns first
@@ -4719,7 +4719,7 @@ def validate_niche(niche_input):
 
 @app.route('/prospect', methods=['POST'])
 def prospect():
-    """
+    '''
     Scout endpoint: discover, filter, score, and rank businesses.
 
     KEY PRODUCT RULE: Scout does NOT save to Airtable and does NOT call GPT.
@@ -4744,7 +4744,7 @@ def prospect():
       "exclusions": ["skip_chains", "skip_high_social"],
       "demo": true               # optional: limits to 3 results without token
     }
-    """
+    '''
     body = request.get_json(force=True, silent=True) or {}
     is_demo = bool(body.get('demo'))
 
@@ -4781,7 +4781,7 @@ def prospect():
     if mode not in MODE_WEIGHTS:
         mode = SCOUT_DEFAULT_MODE
 
-   """    # ── Phase 3 + 4: Intent parsing + niche intelligence ─────────────────────
+   '''    # ── Phase 3 + 4: Intent parsing + niche intelligence ─────────────────────
     # Raw query from frontend "What are you looking for?" field
     raw_query = (
         body.get("user_query")
@@ -4830,7 +4830,7 @@ def prospect():
         print(f"  [i] Low-quality niche: {niche} (score: {niche_validation['quality_score']})")
  
     print(f"  -> Scout [{mode}]: {niche} in {location}, r={radius_miles}mi, limit={limit}")
-    sys.stdout.flush()"""
+    sys.stdout.flush()'''
     fetch_limit = min(limit * 4, 60)  # overfetch then trim after scoring
     raw = []
 
@@ -4947,7 +4947,7 @@ def prospect():
         biz.update(score_data)
         scored.append(biz)
 
-    """    # Sort by opportunity_score first, then by quality tiebreakers so
+    '''    # Sort by opportunity_score first, then by quality tiebreakers so
     # identical scores produce a meaningful ranking instead of clustering.
     # Tiebreakers: higher rating wins, then higher review_count, then
     # alphabetical name (neutral deterministic fallback).
@@ -4982,7 +4982,7 @@ def prospect():
         except Exception as _rerank_err:
             log_error("saturation reranking", _rerank_err)
  
-    top_results = scored[:limit]"""
+    top_results = scored[:limit]'''
     print(f"  -> Ranked {len(scored)} candidates, returning top {len(top_results)} (mode={mode})")
     if top_results:
         for i, b in enumerate(top_results[:5], 1):
@@ -5063,7 +5063,7 @@ def prospect():
             "filters_applied":   hard_filters,
         })
 
-    """    return jsonify({
+    '''    return jsonify({
         "niche":        niche,
         "location":     location,
         "mode":         mode,
@@ -5074,7 +5074,7 @@ def prospect():
         "input_intelligence":  input_intelligence or None,
         "niche_intelligence":  niche_intelligence or None,
         "ranking_strategy":    ranking_strategy,
-    })"""
+    })'''
  
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -5083,7 +5083,7 @@ def prospect():
 
 @app.route('/health/db', methods=['GET'])
 def health_db():
-    """Quick connectivity check - no auth required so it is usable as an uptime monitor."""
+    '''Quick connectivity check - no auth required so it is usable as an uptime monitor.'''
     if not _DB_AVAILABLE:
         return jsonify({"ok": False, "error": "DB module not installed (missing SQLAlchemy / psycopg2-binary)"}), 503
     ok, error = test_connection()
@@ -5094,11 +5094,11 @@ def health_db():
 
 @app.route('/init-db', methods=['POST'])
 def init_db_route():
-    """
+    '''
     Read schema.sql and create all tables if they do not already exist.
     Safe to call multiple times. Never drops tables.
     Requires master token.
-    """
+    '''
     code_type = get_code_type(request)
     if code_type != "master":
         return jsonify({"error": "Access denied. Master token required."}), 401
@@ -5116,7 +5116,7 @@ def init_db_route():
 
 @app.route('/opportunities', methods=['GET'])
 def list_opportunities():
-    """GET /opportunities - return this token's saved Network opportunities."""
+    '''GET /opportunities - return this token's saved Network opportunities.'''
     if get_code_type(request) is None:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     if not _DB_AVAILABLE:
@@ -5153,7 +5153,7 @@ def list_opportunities():
 
 @app.route('/opportunities/<int:opportunity_id>', methods=['GET'])
 def get_opportunity(opportunity_id):
-    """GET /opportunities/<id> - return one full opportunity record."""
+    '''GET /opportunities/<id> - return one full opportunity record.'''
     if get_code_type(request) is None:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     if not _DB_AVAILABLE:
@@ -5174,7 +5174,7 @@ def get_opportunity(opportunity_id):
 
 @app.route('/opportunities/<int:opportunity_id>/status', methods=['PATCH'])
 def patch_opportunity_status(opportunity_id):
-    """PATCH /opportunities/<id>/status - update opportunity state (token-scoped)."""
+    '''PATCH /opportunities/<id>/status - update opportunity state (token-scoped).'''
     if get_code_type(request) is None:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     if not _DB_AVAILABLE:
@@ -5203,7 +5203,7 @@ def patch_opportunity_status(opportunity_id):
 
 @app.route('/followups-due', methods=['GET'])
 def followups_due():
-    """GET /followups-due - return this token's past-due opportunities."""
+    '''GET /followups-due - return this token's past-due opportunities.'''
     if get_code_type(request) is None:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     if not _DB_AVAILABLE:
@@ -5228,11 +5228,11 @@ def followups_due():
 
 @app.route('/opportunities/save', methods=['POST'])
 def save_opportunity_route():
-    """
+    '''
     POST /opportunities/save
     Manually save a Scout card into the current token's Network.
     Called when user clicks [+ Network] on a Scout card.
-    """
+    '''
     if get_code_type(request) is None:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     if not _DB_AVAILABLE:
@@ -5264,11 +5264,11 @@ def save_opportunity_route():
 
 @app.route('/businesses/<int:business_id>/saturation', methods=['GET'])
 def get_business_saturation(business_id):
-    """
+    '''
     GET /businesses/<id>/saturation
     Return saturation data for a specific business + angle + contact combo.
     Query params: opportunity_type, service_angle, contact_target, contact_method
-    """
+    '''
     if get_code_type(request) is None:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     if not _DB_AVAILABLE or not _INTEL_AVAILABLE:
@@ -5301,7 +5301,7 @@ def get_business_saturation(business_id):
 
 @app.route('/signals/preview', methods=['POST'])
 def signals_preview():
-    """
+    '''
     POST /signals/preview
     Run the intelligence pipeline on an ad-hoc business payload.
 
@@ -5314,7 +5314,7 @@ def signals_preview():
             "signal_preferences": ["low social engagement"]
           }
         }
-    """
+    '''
     if get_code_type(request) is None:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     if not _INTEL_AVAILABLE:
