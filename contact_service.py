@@ -1,5 +1,5 @@
 """
-contact_service.py — Contact inference and service angle detection.
+contact_service.py - Contact inference and service angle detection.
 
 No external API calls. Works entirely from data already available in the
 business dict and the request context (user_role, mode, signal_preferences).
@@ -34,7 +34,7 @@ VALID_ANGLES = {
     "reputation_management",
 }
 
-# (pattern_words, angle) — evaluated in order; first match wins
+# (pattern_words, angle) - evaluated in order; first match wins
 _ANGLE_RULES: list[tuple[list[str], str]] = [
     # Performers / events
     (["comedian", "perform", "dj", "musician", "singer", "entertainer"], "events_performance"),
@@ -127,7 +127,7 @@ def infer_service_angle(context: dict, business: dict | None = None) -> str:
 def extract_contact_candidates(business: dict) -> list[dict]:
     """
     Extract all reachable contact paths from available business data.
-    No external calls — uses only the data already in the business dict.
+    No external calls - uses only the data already in the business dict.
 
     Returns a list of candidate dicts, sorted best-first by confidence.
     """
@@ -150,28 +150,28 @@ def extract_contact_candidates(business: dict) -> list[dict]:
     ig = business.get("instagram_url") or business.get("instagram") or ""
     if ig:
         _add("instagram_dm", ig, "medium",
-             "Instagram account detected — DM is a common first-touch for creators and local businesses.",
+             "Instagram account detected - DM is a common first-touch for creators and local businesses.",
              role="owner_or_social_media_manager")
 
     # Facebook
     fb = business.get("facebook_url") or business.get("facebook") or ""
     if fb:
         _add("facebook_message", fb, "low",
-             "Facebook page found — Messenger DM is a lower-response path but viable.",
+             "Facebook page found - Messenger DM is a lower-response path but viable.",
              role="owner_or_page_admin")
 
     # LinkedIn
     li = business.get("linkedin") or ""
     if li:
         _add("linkedin_message", li, "medium",
-             "LinkedIn profile found — good for B2B or professional service outreach.",
+             "LinkedIn profile found - good for B2B or professional service outreach.",
              role="owner_or_decision_maker")
 
     # Phone
     phone = business.get("phone") or ""
     if phone:
         _add("phone_call", phone, "high",
-             "Phone number available — direct call reaches a decision-maker quickly for local businesses.",
+             "Phone number available - direct call reaches a decision-maker quickly for local businesses.",
              role="owner_or_manager")
 
     # Website contact form / email
@@ -180,21 +180,21 @@ def extract_contact_candidates(business: dict) -> list[dict]:
         parsed = urlparse(website if website.startswith("http") else "https://" + website)
         if parsed.netloc:
             _add("website_contact_form", website, "medium",
-                 "Website detected — contact form or email link is a professional first touch for web/SEO services.",
+                 "Website detected - contact form or email link is a professional first touch for web/SEO services.",
                  role="owner_or_marketing_contact")
 
     # Email directly
     email = business.get("email") or ""
     if email and "@" in email:
         _add("email", email, "high",
-             "Email address available — direct email is professional and documented.",
+             "Email address available - direct email is professional and documented.",
              role="owner_or_contact")
 
     # Booking URL
     booking = business.get("booking_url") or (business.get("raw_data") or {}).get("booking_url", "")
     if booking:
         _add("booking_page", booking, "low",
-             "Booking page found — not ideal for cold outreach but confirms digital presence.",
+             "Booking page found - not ideal for cold outreach but confirms digital presence.",
              role="unknown")
 
     # Confidence order: high → medium → low
@@ -242,7 +242,7 @@ def infer_best_contact_path(
 
     best: dict | None = None
     contact_reason = ""
-    contact_target = "owner_or_manager"  # default — labelled as inferred
+    contact_target = "owner_or_manager"  # default - labelled as inferred
 
     # ── Rule 1: social-first creator/photographer ─────────────────────────
     if any(r in user_role for r in ("content creator", "photographer", "videographer",
@@ -252,7 +252,7 @@ def infer_best_contact_path(
             best = ig
             contact_target = "owner_or_social_media_manager (inferred)"
             contact_reason = (
-                "Content creators typically get the best response via Instagram DM — "
+                "Content creators typically get the best response via Instagram DM - "
                 "it's the platform where social media decisions are made and the owner "
                 "or social manager is most active."
             )
@@ -275,7 +275,7 @@ def infer_best_contact_path(
                 best = ig
                 contact_target = "venue_manager_or_social (inferred)"
                 contact_reason = (
-                    "No phone found — Instagram DM is the next-best path for venue "
+                    "No phone found - Instagram DM is the next-best path for venue "
                     "performance booking outreach."
                 )
 
@@ -287,14 +287,14 @@ def infer_best_contact_path(
             best = em
             contact_target = "owner_or_marketing_contact (inferred)"
             contact_reason = (
-                "Email is the professional standard for web/SEO/marketing outreach — "
+                "Email is the professional standard for web/SEO/marketing outreach - "
                 "it's documentable, easy to follow up on, and expected by business owners."
             )
         elif web:
             best = web
             contact_target = "owner_or_marketing_contact (inferred)"
             contact_reason = (
-                "Website contact form is ideal for web/SEO services — it demonstrates "
+                "Website contact form is ideal for web/SEO services - it demonstrates "
                 "you can navigate their digital presence and positions you professionally."
             )
 
@@ -313,7 +313,7 @@ def infer_best_contact_path(
             best = phone
             contact_target = "owner_or_manager (inferred)"
             contact_reason = (
-                "No website detected — phone is the most direct path to the owner "
+                "No website detected - phone is the most direct path to the owner "
                 "for a business without an active digital presence."
             )
 
