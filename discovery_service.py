@@ -1,7 +1,7 @@
 """
-discovery_service.py — Multi-source discovery helpers for Yelhao.
+discovery_service.py - Multi-source discovery helpers for Yelhao.
 
-PHASE 7 STUBS — safe to import, not yet wired into /prospect.
+PHASE 7 STUBS - safe to import, not yet wired into /prospect.
 These are tested helpers for the next discovery expansion pass.
 
 Wire-in instructions (for next pass):
@@ -51,7 +51,7 @@ def discover_social_first_candidates(
     # or a local index of known social profiles by niche + location.
     print(
         f"[Discovery] discover_social_first_candidates called: "
-        f"niche={niche!r}, location={location!r}, limit={limit} (stub — returning empty)",
+        f"niche={niche!r}, location={location!r}, limit={limit} (stub - returning empty)",
         flush=True,
     )
     return []
@@ -84,7 +84,7 @@ def merge_and_dedupe_candidates(candidates: list[dict]) -> list[dict]:
     result: list[dict] = []
 
     def _richness(c: dict) -> int:
-        """Count non-empty fields — higher = richer record."""
+        """Count non-empty fields - higher = richer record."""
         return sum(1 for v in c.values() if v is not None and v != "" and v != [] and v != {})
 
     def _name_loc_key(c: dict) -> str:
