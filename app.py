@@ -92,7 +92,7 @@ from ddgs import DDGS
 from urllib.parse import urlparse, quote
 import hashlib
 
-# --- DATABASE (persistence layer — Phase 1) -----------------------------------
+# --- DATABASE (persistence layer - Phase 1) -----------------------------------
 try:
     from db import test_connection
     from database_service import (
@@ -168,7 +168,7 @@ CORS(app)
 
 # --- TOKEN HASHING -----------------------------------------------------------
 def hash_token(raw: str) -> str:
-    """SHA-256 of the raw token — we never store the raw code."""
+    """SHA-256 of the raw token - we never store the raw code."""
     return hashlib.sha256((raw or "").strip().lower().encode()).hexdigest()
 
 def get_token_hash(req) -> str | None:
@@ -319,7 +319,7 @@ def safe_get(url, timeout=10):
     """
     html, status = safe_get(url, timeout=timeout)
  
-    # safe_get returns (None, str(error)) on failure — detect that
+    # safe_get returns (None, str(error)) on failure - detect that
     if isinstance(status, str) and not status.isdigit():
         # It's an error string, not a numeric code
         try:
@@ -439,7 +439,7 @@ def find_social_links(html):
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # Pass 1: <a href> — most reliable
+    # Pass 1: <a href> - most reliable
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
         for platform, pat in PATTERNS.items():
@@ -1828,7 +1828,7 @@ def push_to_airtable(report, enrichment, website_url="", location="", hubspot_co
 
     # Resolve objective_mode for scoring and Airtable's Mode Used field.
     # Priority: explicit mode param → report["objective_mode"] → SCOUT_DEFAULT_MODE.
-    # _pipeline_mode (multi_model/claude_only/gpt_only) is intentionally excluded —
+    # _pipeline_mode (multi_model/claude_only/gpt_only) is intentionally excluded -
     # it describes AI routing, not Scout intent, and has no entry in MODE_WEIGHTS.
     # If mode is None (business analyzed directly without Scout), score defaults to
     # SCOUT_DEFAULT_MODE. This is acceptable for enrichment but is not Scout-ranked.
@@ -1864,7 +1864,7 @@ def push_to_airtable(report, enrichment, website_url="", location="", hubspot_co
         "Salesforce Lead ID": salesforce_lead_id or "",
         # ── New analysis-state fields (Phase 4) ──────────────────────────────
         # These fields require columns to exist in your Airtable base before they write.
-        # The retry loop below drops any unrecognised field silently — no crash risk —
+        # The retry loop below drops any unrecognised field silently - no crash risk -
         # but data will NOT be saved until the column exists.
         #
         # Required Airtable columns (add these to your Leads table):
@@ -1938,7 +1938,7 @@ def notify_n8n_after_analyze(business_name, location, report, opp_score, opp_con
     n8n can then email or text the user with a summary of the saved business.
 
     Requires N8N_WEBHOOK_URL to be set in Render env vars.
-    If the env var is not set this is a silent no-op — safe to deploy any time.
+    If the env var is not set this is a silent no-op - safe to deploy any time.
 
     n8n receives:
       event, business_name, location, opportunity_score, score_confidence,
@@ -1978,7 +1978,7 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
     Runs in a background thread. Executes the full pipeline and stores result in JOBS.
     Also updates the cache when done.
 
-    mode          = pipeline routing mode (multi_model / claude_only / gpt_only) — AI infrastructure only
+    mode          = pipeline routing mode (multi_model / claude_only / gpt_only) - AI infrastructure only
     objective_mode = Scout intent (outreach / referral / partnership / acquisition / market / venture)
                      Optional. Passed through from /agent when triggered via Scout Deep Analyze.
     """
@@ -3139,7 +3139,7 @@ SCOUT_DEFAULT_MODE = "outreach"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SCORING ENGINE v2 — Structured Signal Model
+# SCORING ENGINE v2 - Structured Signal Model
 # Philosophy: high score = proven demand + visible gap + clear next action
 #
 # Flow:
@@ -3188,7 +3188,7 @@ def score_website_quality(candidate: dict) -> int:
     if has_booking:
         score += 30
 
-    # CTA signals in scraped content (agent path only — degrade gracefully)
+    # CTA signals in scraped content (agent path only - degrade gracefully)
     content = " ".join([
         str(candidate.get("website_content") or ""),
         str(candidate.get("description") or ""),
@@ -3239,7 +3239,7 @@ def score_social_activity(candidate: dict) -> int:
 def score_reputation_strength(rating: float, review_count: int) -> int:
     """
     0-100. Both rating AND review count matter.
-    Neither alone is sufficient — combines volume (demand proof) with quality.
+    Neither alone is sufficient - combines volume (demand proof) with quality.
     """
     if not rating and not review_count:
         return 0
@@ -3253,7 +3253,7 @@ def score_reputation_strength(rating: float, review_count: int) -> int:
     elif rating > 0:    rating_pts = 5
     else:               rating_pts = 0
 
-    # Review count component (0-50) — logarithmic-ish to avoid giant bias
+    # Review count component (0-50) - logarithmic-ish to avoid giant bias
     if review_count >= 500:   count_pts = 50
     elif review_count >= 200: count_pts = 42
     elif review_count >= 100: count_pts = 34
@@ -3291,7 +3291,7 @@ def score_contactability(candidate: dict) -> int:
 def build_signals(candidate: dict, mode: str = "outreach") -> dict:
     """
     Builds a structured signal object from a candidate dict.
-    Uses only data already present in the pipeline — no extra API calls.
+    Uses only data already present in the pipeline - no extra API calls.
 
     candidate keys consumed:
       rating, review_count, followers, website, platform, instagram,
@@ -3321,7 +3321,7 @@ def build_signals(candidate: dict, mode: str = "outreach") -> dict:
     rep = score_reputation_strength(rating, review_count)
     cq  = score_contactability(candidate)
 
-    # Gap logic — specific, not generic
+    # Gap logic - specific, not generic
     booking_gap  = not has_booking
     website_gap  = max(0, 100 - wq) if has_website else 100      # 100 if no site at all
     social_gap   = max(0, 100 - sq) if has_social  else 100
@@ -3424,7 +3424,7 @@ def compute_sub_scores(signals: dict, mode: str = "outreach") -> dict:
     seo_sev     = min(gaps["seo_gap"],     100) * 0.4
 
     if mode == "outreach":
-        # All gaps matter — outreach targets fixable weak infrastructure
+        # All gaps matter - outreach targets fixable weak infrastructure
         gap_score = int(booking_sev * 0.4 + website_sev * 0.3 + seo_sev * 0.2 + social_sev * 0.1)
     elif mode == "partnership":
         # Social gap matters most (creator/collab angle), website is secondary
@@ -3529,7 +3529,7 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
     elif rep_str >= 35 and reviews >= 5:
         reasons.append({
             "key": "demand_building",
-            "signal": f"Growing demand: {reviews} reviews at {rating}★ — active and reachable, not yet oversaturated.",
+            "signal": f"Growing demand: {reviews} reviews at {rating}★ - active and reachable, not yet oversaturated.",
             "impact": "positive",
             "weight": "medium",
         })
@@ -3537,14 +3537,14 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
         if parent_mode == "outreach":
             reasons.append({
                 "key": "demand_unknown",
-                "signal": "No review data found — demand unconfirmed, but the digital gap alone makes this worth approaching.",
+                "signal": "No review data found - demand unconfirmed, but the digital gap alone makes this worth approaching.",
                 "impact": "neutral",
                 "weight": "medium",
             })
         else:
             reasons.append({
                 "key": "demand_unknown",
-                "signal": "No public review data — difficult to confirm demand, which lowers confidence for this objective.",
+                "signal": "No public review data - difficult to confirm demand, which lowers confidence for this objective.",
                 "impact": "negative",
                 "weight": "medium",
             })
@@ -3561,7 +3561,7 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
         elif gaps["booking_gap"]:
             reasons.append({
                 "key": "booking_gap",
-                "signal": "No online booking system — common gap for businesses in this category.",
+                "signal": "No online booking system - common gap for businesses in this category.",
                 "impact": "positive",
                 "weight": "medium",
             })
@@ -3569,14 +3569,14 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
         if gaps["website_gap"] == 100:
             reasons.append({
                 "key": "no_website",
-                "signal": "No website found — the business is likely losing inbound traffic to better-indexed competitors.",
+                "signal": "No website found - the business is likely losing inbound traffic to better-indexed competitors.",
                 "impact": "positive",
                 "weight": "high",
             })
         elif 40 < gaps["website_gap"] < 100:
             reasons.append({
                 "key": "weak_website",
-                "signal": f"Website exists but quality is weak — probably leaking inbound traffic with no clear CTA or booking path.",
+                "signal": f"Website exists but quality is weak - probably leaking inbound traffic with no clear CTA or booking path.",
                 "impact": "positive",
                 "weight": "medium",
             })
@@ -3584,7 +3584,7 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
         if gaps["social_gap"] >= 60:
             reasons.append({
                 "key": "weak_social",
-                "signal": "Weak or no social presence — underserved on discovery, which compounds the website gap.",
+                "signal": "Weak or no social presence - underserved on discovery, which compounds the website gap.",
                 "impact": "positive",
                 "weight": "medium",
             })
@@ -3592,7 +3592,7 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
         if gaps["seo_gap"] >= 60:
             reasons.append({
                 "key": "seo_gap",
-                "signal": "Limited search visibility — business is likely hard to find outside word-of-mouth.",
+                "signal": "Limited search visibility - business is likely hard to find outside word-of-mouth.",
                 "impact": "positive",
                 "weight": "medium",
             })
@@ -3601,21 +3601,21 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
         if pres["has_social"] and qual["social_activity"] >= 50:
             reasons.append({
                 "key": "social_active",
-                "signal": "Active social presence — strong signal for partnership or creator collab fit.",
+                "signal": "Active social presence - strong signal for partnership or creator collab fit.",
                 "impact": "positive",
                 "weight": "high",
             })
         elif gaps["social_gap"] == 100:
             reasons.append({
                 "key": "no_social",
-                "signal": "No social profiles detected — limits the natural collab or creator pitch angle.",
+                "signal": "No social profiles detected - limits the natural collab or creator pitch angle.",
                 "impact": "negative",
                 "weight": "high",
             })
         elif gaps["social_gap"] >= 60:
             reasons.append({
                 "key": "weak_social",
-                "signal": "Underdeveloped social content — if the category fits, a content or creator partnership pitch is natural here.",
+                "signal": "Underdeveloped social content - if the category fits, a content or creator partnership pitch is natural here.",
                 "impact": "positive",
                 "weight": "medium",
             })
@@ -3623,7 +3623,7 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
         if not gaps["booking_gap"]:
             reasons.append({
                 "key": "booking_present",
-                "signal": "Has an active booking system — operationally stable business, which makes partnership pitches easier.",
+                "signal": "Has an active booking system - operationally stable business, which makes partnership pitches easier.",
                 "impact": "positive",
                 "weight": "medium",
             })
@@ -3631,7 +3631,7 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
         if biz["visual_category"]:
             reasons.append({
                 "key": "visual_category",
-                "signal": "Partnership fit: visual business category — natural fit for creator, brand, or content collaboration.",
+                "signal": "Partnership fit: visual business category - natural fit for creator, brand, or content collaboration.",
                 "impact": "positive",
                 "weight": "medium",
             })
@@ -3640,21 +3640,21 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
         if gaps["website_gap"] == 100:
             reasons.append({
                 "key": "no_website",
-                "signal": "No website — limited public data for market analysis, treat with lower confidence.",
+                "signal": "No website - limited public data for market analysis, treat with lower confidence.",
                 "impact": "negative",
                 "weight": "medium",
             })
         if rep_str >= 60:
             reasons.append({
                 "key": "market_signal",
-                "signal": f"Established category player — {reviews} reviews, {rating}★, useful anchor for competitive landscape mapping.",
+                "signal": f"Established category player - {reviews} reviews, {rating}★, useful anchor for competitive landscape mapping.",
                 "impact": "positive",
                 "weight": "high",
             })
         if gaps["seo_gap"] >= 60:
             reasons.append({
                 "key": "seo_gap",
-                "signal": "Limited search visibility — suggests the category has room for stronger players, useful market context.",
+                "signal": "Limited search visibility - suggests the category has room for stronger players, useful market context.",
                 "impact": "negative",
                 "weight": "medium",
             })
@@ -3663,14 +3663,14 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
     if con["contact_score"] >= 50 and biz["is_independent"]:
         reasons.append({
             "key": "actionable",
-            "signal": "Actionable: independent business with a public contact path — outreach is realistic.",
+            "signal": "Actionable: independent business with a public contact path - outreach is realistic.",
             "impact": "positive",
             "weight": "medium",
         })
     elif con["contact_score"] < 20:
         reasons.append({
             "key": "hard_to_reach",
-            "signal": "Limited contact signals found — harder to reach without more research first.",
+            "signal": "Limited contact signals found - harder to reach without more research first.",
             "impact": "negative",
             "weight": "medium",
         })
@@ -3678,7 +3678,7 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
     if biz["is_chain"]:
         reasons.append({
             "key": "is_chain",
-            "signal": "Appears to be a chain or franchise — lower individual outreach and partnership fit.",
+            "signal": "Appears to be a chain or franchise - lower individual outreach and partnership fit.",
             "impact": "negative",
             "weight": "medium",
         })
@@ -3687,7 +3687,7 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
     if tim["growth_signal"] and parent_mode in ("outreach", "partnership"):
         reasons.append({
             "key": "growth_signal",
-            "signal": f"Growth signal: {reviews} reviews at {rating}★ — business is active and building, not yet saturated.",
+            "signal": f"Growth signal: {reviews} reviews at {rating}★ - business is active and building, not yet saturated.",
             "impact": "positive",
             "weight": "medium",
         })
@@ -3719,53 +3719,53 @@ def _build_opportunity_summary(signals: dict, sub_scores: dict, score: int, mode
 
     if mode == "outreach":
         if has_demand and not has_booking and not has_website:
-            return (f"High-demand business ({rep['review_count']} reviews) with no website or booking system — "
+            return (f"High-demand business ({rep['review_count']} reviews) with no website or booking system - "
                     "strong outreach opportunity for digital infrastructure services.")
         elif has_demand and not has_booking:
             return (f"Established local business ({rep['rating']}★, {rep['review_count']} reviews) "
-                    "missing an online booking flow — clear conversion gap to address.")
+                    "missing an online booking flow - clear conversion gap to address.")
         elif has_demand and not has_website:
-            return ("Proven local demand with no web presence — likely leaking inbound traffic to "
+            return ("Proven local demand with no web presence - likely leaking inbound traffic to "
                     "competitors and a strong candidate for digital outreach.")
         elif not has_demand and not has_website:
-            return ("Limited review data and no website — high digital gap but unconfirmed demand. "
+            return ("Limited review data and no website - high digital gap but unconfirmed demand. "
                     "Worth a cold approach if niche has known local demand.")
         else:
-            return ("Active local business with moderate digital infrastructure — "
+            return ("Active local business with moderate digital infrastructure - "
                     "potential for incremental outreach around specific gaps.")
 
     elif mode == "partnership":
         if has_social and has_demand:
             return (f"Reputable, active business ({rep['rating']}★, {rep['review_count']} reviews) "
-                    "with social presence — strong partner or creator collab candidate.")
+                    "with social presence - strong partner or creator collab candidate.")
         elif biz["visual_category"] and has_demand:
-            return ("High-aesthetic category with proven local reputation — "
+            return ("High-aesthetic category with proven local reputation - "
                     "well-suited for brand partnership or content collaboration.")
         elif has_demand:
-            return ("Established local business with solid reputation — "
+            return ("Established local business with solid reputation - "
                     "reachable for partnership despite limited social infrastructure.")
         else:
-            return ("Early-stage or data-sparse business — partnership viability depends on niche "
+            return ("Early-stage or data-sparse business - partnership viability depends on niche "
                     "visibility and category fit.")
 
     elif mode == "market":
         if has_demand and has_website:
             return (f"Established category player ({rep['review_count']} reviews, {rep['rating']}★) "
-                    "with web presence — valuable data point for market landscape mapping.")
+                    "with web presence - valuable data point for market landscape mapping.")
         elif has_demand:
-            return (f"Active local business with {rep['review_count']} reviews — "
+            return (f"Active local business with {rep['review_count']} reviews - "
                     "useful signal for category demand benchmarking.")
         else:
-            return ("Limited public signal data — low-confidence market data point. "
+            return ("Limited public signal data - low-confidence market data point. "
                     "Useful as a gap marker in the landscape, not a primary benchmark.")
 
     # Fallback for acquisition, venture, referral
     if score >= 70:
-        return "Strong signal profile for this objective — high-priority target."
+        return "Strong signal profile for this objective - high-priority target."
     elif score >= 50:
-        return "Moderate signal match — viable candidate with specific gaps to evaluate."
+        return "Moderate signal match - viable candidate with specific gaps to evaluate."
     else:
-        return "Lower signal match — may not fit primary objective criteria."
+        return "Lower signal match - may not fit primary objective criteria."
 
 
 # ── Goal → mode inference ─────────────────────────────────────────────────────
@@ -3800,7 +3800,7 @@ def infer_objective_mode(goal: str) -> str:
     return "outreach"
 
 
-# ── Mode weights (v2) — kept alongside v1 for compatibility ──────────────────
+# ── Mode weights (v2) - kept alongside v1 for compatibility ──────────────────
 # These are the sub-score blending weights per mode.
 # They determine how reputation/gap/quality/timing/contact/fit combine into
 # the final opportunity score.
@@ -3857,11 +3857,11 @@ SUBSCORE_WEIGHTS = {
 }
 
 
-# ── Main scoring entry point (v2) — replaces score_and_explain() ──────────────
+# ── Main scoring entry point (v2) - replaces score_and_explain() ──────────────
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SCORING ENGINE v3 — Parent Signal Layer (Demand / Gap / Conversion)
+# SCORING ENGINE v3 - Parent Signal Layer (Demand / Gap / Conversion)
 #
 # Sits on top of build_signals() + compute_sub_scores().
 # Makes the score readable to a normal user:
@@ -3899,9 +3899,9 @@ SIGNAL_SCORE_WEIGHTS = {
 def compute_signal_scores(signals: dict, sub_scores: dict, mode: str = "outreach") -> dict:
     """
     Computes three parent signal scores (each 0-100):
-      demand     — proof that real business/category demand exists
-      gap        — size and fixability of the opportunity gap
-      conversion — how actionable/reachable is this opportunity
+      demand     - proof that real business/category demand exists
+      gap        - size and fixability of the opportunity gap
+      conversion - how actionable/reachable is this opportunity
 
     Uses only data already present in signals + sub_scores.
     No additional API calls.
@@ -3924,7 +3924,7 @@ def compute_signal_scores(signals: dict, sub_scores: dict, mode: str = "outreach
     # Answers: "Is there proof this business/category has real demand?"
     #
     # Components:
-    #   review strength  (combined rating × count — best demand proxy we have)
+    #   review strength  (combined rating × count - best demand proxy we have)
     #   timing / growth  (active business signal)
     #   data coverage    (how much we can trust the demand reading)
     #   booking/platform competitor activity proxy (has a booking = operating)
@@ -3952,14 +3952,14 @@ def compute_signal_scores(signals: dict, sub_scores: dict, mode: str = "outreach
     # Weights differ by mode:
     #   outreach:    booking gap dominates (conversion path fix)
     #   partnership: social/content gap matters most
-    #   market:      gap is less important — we want established players
+    #   market:      gap is less important - we want established players
 
     booking_sev = 75 if gaps["booking_gap"] else 0
     website_sev = min(gaps["website_gap"], 100)
     social_sev  = min(gaps["social_gap"],  100)
     seo_sev     = min(gaps["seo_gap"],     100)
 
-    # Quality weakness amplifier — weak infrastructure makes gaps more fixable
+    # Quality weakness amplifier - weak infrastructure makes gaps more fixable
     quality_weakness = max(0, 60 - sub_scores["quality_score"])  # 0 if quality≥60
 
     if parent_mode == "outreach":
@@ -3978,7 +3978,7 @@ def compute_signal_scores(signals: dict, sub_scores: dict, mode: str = "outreach
             + seo_sev      * 0.10
             + quality_weakness * 0.05
         )
-    else:  # market — gaps are noise, not signal
+    else:  # market - gaps are noise, not signal
         gap_raw = max(0, 50 - (booking_sev * 0.3 + website_sev * 0.2))
 
     gap = max(0, min(round(gap_raw), 100))
@@ -3993,7 +3993,7 @@ def compute_signal_scores(signals: dict, sub_scores: dict, mode: str = "outreach
     fit_score     = sub_scores["fit_score"]         # 0-100
     cov_score     = conf["data_coverage_score"]     # 0-100
 
-    # Independence bonus — independent operators are far more approachable
+    # Independence bonus - independent operators are far more approachable
     indie_bonus = 15 if biz["is_independent"] else -10
 
     # Visual category bonus for partnership (creator pitch angle is clearer)
@@ -4050,28 +4050,28 @@ def _build_top_signal(signal_scores: dict, signals: dict, mode: str) -> str:
         if gap >= 70 and demand < 40:
             return "Clear outreach gap, limited demand signal"
         if demand < 40 and gap < 40:
-            return "Low signal — limited demand and gap data"
-        return "Moderate opportunity — some gaps, some demand"
+            return "Low signal - limited demand and gap data"
+        return "Moderate opportunity - some gaps, some demand"
 
     # ── Partnership ───────────────────────────────────────────────────────────
     elif parent_mode == "partnership":
         if demand >= 65 and pres["has_social"]:
             return f"Trusted local brand ({rep['rating']}★) with active social presence"
         if demand >= 65 and biz["visual_category"]:
-            return "Reputable visual business — strong creator or collab fit"
+            return "Reputable visual business - strong creator or collab fit"
         if demand >= 50 and gaps["social_gap"] >= 60:
             return "Trusted local brand + weak social content"
         if demand >= 50:
-            return "Established reputation — reachable for partnership"
-        return "Limited demand signal — lower partnership confidence"
+            return "Established reputation - reachable for partnership"
+        return "Limited demand signal - lower partnership confidence"
 
     # ── Market ────────────────────────────────────────────────────────────────
     else:
         if demand >= 70:
-            return f"Strong category player — {rep['review_count']} reviews, {rep['rating']}★"
+            return f"Strong category player - {rep['review_count']} reviews, {rep['rating']}★"
         if demand >= 50:
-            return "Active local business — useful market data point"
-        return "Sparse data — limited market signal confidence"
+            return "Active local business - useful market data point"
+        return "Sparse data - limited market signal confidence"
 
 
 def score_and_explain(candidate: dict, mode: str, soft_preferences=None, exclusions=None) -> dict:
@@ -4085,14 +4085,14 @@ def score_and_explain(candidate: dict, mode: str, soft_preferences=None, exclusi
     Return shape preserves all existing frontend fields.
     Adds: signal_scores, top_signal, signals, sub_scores, opportunity_summary.
     """
-    # Normalise mode — keep original for legacy routes, resolve alias for parent layer
+    # Normalise mode - keep original for legacy routes, resolve alias for parent layer
     if mode not in SUBSCORE_WEIGHTS:
         mode = SCOUT_DEFAULT_MODE
 
     # 1. Build structured signal object
     sigs = build_signals(candidate, mode)
 
-    # 2. Compute sub-scores (v2 — kept for debugging + backward compat)
+    # 2. Compute sub-scores (v2 - kept for debugging + backward compat)
     sub = compute_sub_scores(sigs, mode)
 
     # 3. Compute parent signal scores (Demand / Gap / Conversion)
@@ -4148,7 +4148,7 @@ def score_and_explain(candidate: dict, mode: str, soft_preferences=None, exclusi
 def apply_hard_filters(candidate, hard_filters):
     """
     Returns (passes: bool, reason: str).
-    Hard filters are knockout — fail means excluded before scoring.
+    Hard filters are knockout - fail means excluded before scoring.
 
     hard_filters keys (all optional):
       min_rating (float), review_ceiling (int),
@@ -4173,15 +4173,15 @@ def apply_hard_filters(candidate, hard_filters):
 
     req_website = (hard_filters.get("requires_website") or "either").lower()
     if req_website == "yes" and not has_website:
-        return False, "No website — required by filter"
+        return False, "No website - required by filter"
     if req_website == "no" and has_website:
-        return False, "Has website — excluded by filter"
+        return False, "Has website - excluded by filter"
 
     req_booking = (hard_filters.get("requires_booking") or "either").lower()
     if req_booking == "yes" and not has_booking:
-        return False, "No booking platform — required by filter"
+        return False, "No booking platform - required by filter"
     if req_booking == "no" and has_booking:
-        return False, "Has booking — excluded by filter"
+        return False, "Has booking - excluded by filter"
 
     return True, "passed"
 
@@ -4222,9 +4222,9 @@ def normalize_filters(raw):
     }
 
 
-# score_business_fit() was removed — superseded by score_and_explain() (see SCOUT section above).
+# score_business_fit() was removed - superseded by score_and_explain() (see SCOUT section above).
 # Scout now uses score_and_explain() with MODE_WEIGHTS for all candidate ranking.
-# calculate_score() below is intentionally kept — it belongs to the Analyze/report path only
+# calculate_score() below is intentionally kept - it belongs to the Analyze/report path only
 # and operates on GPT report output, not on raw candidate signals.
 
 
@@ -4727,7 +4727,7 @@ def prospect():
     {
       "niche":    "nail salon",
       "location": "Brooklyn, NY",
-      "radius":   5,              # miles — uses Google Nearby Search when provided
+      "radius":   5,              # miles - uses Google Nearby Search when provided
       "limit":    10,
       "mode":     "outreach",     # outreach | referral | partnership | acquisition | market | venture
       "hard_filters": {
@@ -4822,7 +4822,7 @@ def prospect():
         except Exception as _intent_err:
             log_error("intent parsing", _intent_err)
  
-    # Validate niche quality — warn but never block
+    # Validate niche quality - warn but never block
     niche_validation = validate_niche(niche)
     if niche_validation["quality_score"] < 50:
         print(f"  [i] Low-quality niche: {niche} (score: {niche_validation['quality_score']})")
@@ -4931,14 +4931,14 @@ def prospect():
     for biz in deduped:
         passes, reason = apply_hard_filters(biz, hard_filters)
         if not passes:
-            print(f"  [filter] {biz.get('business_name')} — {reason}")
+            print(f"  [filter] {biz.get('business_name')} - {reason}")
             continue
         qualified.append(biz)
 
     print(f"  -> After hard filters: {len(qualified)} qualified")
     sys.stdout.flush()
 
-    # ── Score and rank — no GPT, signal-based only ────────────────────────────
+    # ── Score and rank - no GPT, signal-based only ────────────────────────────
     scored = []
     for biz in qualified:
         score_data = score_and_explain(biz, mode, soft_preferences, exclusions)
@@ -4984,10 +4984,10 @@ def prospect():
     print(f"  -> Ranked {len(scored)} candidates, returning top {len(top_results)} (mode={mode})")
     if top_results:
         for i, b in enumerate(top_results[:5], 1):
-            print(f"     #{i}: {b['business_name']} — score {b['opportunity_score']}/100 ({b['score_confidence']} confidence)")
+            print(f"     #{i}: {b['business_name']} - score {b['opportunity_score']}/100 ({b['score_confidence']} confidence)")
     sys.stdout.flush()
 
-    # ── Discovery tracking — Scout previews, does NOT create Network entries ────
+    # ── Discovery tracking - Scout previews, does NOT create Network entries ────
     if _DB_AVAILABLE:
         try:
             token_raw  = request.headers.get("X-Agent-Token", "")
@@ -5002,7 +5002,7 @@ def prospect():
                 "filters":              hard_filters or None,
                 "token_hash":           token_hash,
             })
-            print(f"  [DB] search saved — search_id={search_id}", flush=True)
+            print(f"  [DB] search saved - search_id={search_id}", flush=True)
 
             logged = 0
             for b in top_results:
@@ -5036,7 +5036,7 @@ def prospect():
                     )
                     logged += 1
 
-            print(f"  [DB] discovery tracking done — {logged}/{len(top_results)} events", flush=True)
+            print(f"  [DB] discovery tracking done - {logged}/{len(top_results)} events", flush=True)
 
         except Exception as _db_err:
             log_error("prospect discovery tracking", _db_err)
@@ -5076,12 +5076,12 @@ def prospect():
  
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DATABASE HEALTH + INIT ROUTES  (Phase 1 — connectivity only)
+# DATABASE HEALTH + INIT ROUTES  (Phase 1 - connectivity only)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/health/db', methods=['GET'])
 def health_db():
-    """Quick connectivity check — no auth required so it is usable as an uptime monitor."""
+    """Quick connectivity check - no auth required so it is usable as an uptime monitor."""
     if not _DB_AVAILABLE:
         return jsonify({"ok": False, "error": "DB module not installed (missing SQLAlchemy / psycopg2-binary)"}), 503
     ok, error = test_connection()
@@ -5114,7 +5114,7 @@ def init_db_route():
 
 @app.route('/opportunities', methods=['GET'])
 def list_opportunities():
-    """GET /opportunities — return this token's saved Network opportunities."""
+    """GET /opportunities - return this token's saved Network opportunities."""
     if get_code_type(request) is None:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     if not _DB_AVAILABLE:
@@ -5151,7 +5151,7 @@ def list_opportunities():
 
 @app.route('/opportunities/<int:opportunity_id>', methods=['GET'])
 def get_opportunity(opportunity_id):
-    """GET /opportunities/<id> — return one full opportunity record."""
+    """GET /opportunities/<id> - return one full opportunity record."""
     if get_code_type(request) is None:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     if not _DB_AVAILABLE:
@@ -5172,7 +5172,7 @@ def get_opportunity(opportunity_id):
 
 @app.route('/opportunities/<int:opportunity_id>/status', methods=['PATCH'])
 def patch_opportunity_status(opportunity_id):
-    """PATCH /opportunities/<id>/status — update opportunity state (token-scoped)."""
+    """PATCH /opportunities/<id>/status - update opportunity state (token-scoped)."""
     if get_code_type(request) is None:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     if not _DB_AVAILABLE:
@@ -5201,7 +5201,7 @@ def patch_opportunity_status(opportunity_id):
 
 @app.route('/followups-due', methods=['GET'])
 def followups_due():
-    """GET /followups-due — return this token's past-due opportunities."""
+    """GET /followups-due - return this token's past-due opportunities."""
     if get_code_type(request) is None:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     if not _DB_AVAILABLE:
@@ -5247,7 +5247,7 @@ def save_opportunity_route():
         return jsonify(result), 500
 
     print(
-        f"  [DB] /opportunities/save — biz={result['business_id']} "
+        f"  [DB] /opportunities/save - biz={result['business_id']} "
         f"opp={result['opportunity_id']} already={result['already_saved']} "
         f"token={token_hash[:8]}...",
         flush=True,
