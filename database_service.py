@@ -1239,7 +1239,7 @@ def get_candidate_exposure_stats(
             params       = {f"n{i}": n for i, n in enumerate(name_list)}
 
             # NEW
-            biz_rows = session.execute(
+             biz_rows = session.execute(
                 text(f"SELECT id, name, location FROM businesses WHERE name IN ({placeholders})"),
                 params,
             ).fetchall()
