@@ -1,5 +1,5 @@
 """
-intent_service.py — Input intelligence for Yelhao's "What are you looking for?" field.
+intent_service.py - Input intelligence for Yelhao's "What are you looking for?" field.
 
 PHASE 3 + PHASE 4.
 
@@ -229,7 +229,7 @@ def parse_user_intent(raw_query: str, explicit_fields: dict | None = None) -> di
     }
     # ── Extract problem signal ────────────────────────────────────────────────
     problem_signal: str | None    = None
-    # Only use explicit service_angle override — mode is not a service angle
+    # Only use explicit service_angle override - mode is not a service angle
     service_angle: str | None = (
         explicit_fields.get("service_angle")
         if explicit_fields.get("service_angle") in _VALID_SERVICE_ANGLES
@@ -482,7 +482,7 @@ def build_niche_intelligence(
     if not service_angle:
         service_angle = _infer_angle(user_role, problem_signal, business_category)
 
-    # Build niche key — lowercase snake_case composite
+    # Build niche key - lowercase snake_case composite
     _parts = [
         _snake(user_role        or ""),
         _snake(business_category or ""),
@@ -602,7 +602,7 @@ except NameError:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PHASE 1 — classify_fetch_result
+# PHASE 1 - classify_fetch_result
 # ─────────────────────────────────────────────────────────────────────────────
 
 def classify_fetch_result(
@@ -691,7 +691,7 @@ def classify_fetch_result(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PHASE 2 — build_discovery_verification_signals
+# PHASE 2 - build_discovery_verification_signals
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_discovery_verification_signals(
@@ -884,7 +884,7 @@ def build_discovery_verification_signals(
                     f"No {asset} was found in either the initial scan or deep analysis."
                 ),
                 "business_meaning": (
-                    f"This appears to be a genuine gap — the business likely has no active {asset}."
+                    f"This appears to be a genuine gap - the business likely has no active {asset}."
                 ),
                 "opportunity_angle": f"{asset}_creation",
             })
@@ -902,12 +902,12 @@ def build_discovery_verification_signals(
             "These are intelligence opportunities, not data errors."
         )
         recommended_action = (
-            "Use the discovery gaps as conversation starters — the business likely has "
+            "Use the discovery gaps as conversation starters - the business likely has "
             "digital assets that aren't well-connected or surfaced in local search."
         )
     elif miss_types:
         pattern_summary = f"Confirmed missing: {', '.join(m['type'].replace('true_missing_asset','') for m in mismatches if m['type']=='true_missing_asset')}. Both sources agree."
-        recommended_action = "Focus outreach on the confirmed missing assets — these are the highest-value gaps."
+        recommended_action = "Focus outreach on the confirmed missing assets - these are the highest-value gaps."
     else:
         pattern_summary = "Assets appear consistent between Scout and Analyze."
         recommended_action = "No significant discovery gaps found. Proceed with standard outreach."
@@ -922,7 +922,7 @@ def build_discovery_verification_signals(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PHASE 5 — apply_saturation_rerank
+# PHASE 5 - apply_saturation_rerank
 # ─────────────────────────────────────────────────────────────────────────────
 
 def apply_saturation_rerank(
@@ -1058,7 +1058,7 @@ def apply_saturation_rerank(
         })
 
     print(
-        f"[Rerank] exposure stats applied — "
+        f"[Rerank] exposure stats applied - "
         f"{penalized_count}/{len(annotated)} candidates penalized",
         flush=True,
     )
@@ -1086,7 +1086,7 @@ def apply_saturation_rerank(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PHASE 6 — compute_opportunity_score_v2
+# PHASE 6 - compute_opportunity_score_v2
 # ─────────────────────────────────────────────────────────────────────────────
 
 def compute_opportunity_score_v2(
@@ -1096,15 +1096,15 @@ def compute_opportunity_score_v2(
 ) -> dict:
     """
     Phase 6 scoring model. Works with the FULL opportunity signals object
-    (output of build_opportunity_signals) — not just social_conversion.
+    (output of build_opportunity_signals) - not just social_conversion.
 
     Weighted combination of 6 dimensions:
-        business_quality   — trust + intent (are they established?)
-        opportunity_gap    — role-matched weakness = your value (high gap = high score)
-        user_fit           — platform alignment with user's service angle
-        contactability     — can we actually reach this business?
-        saturation         — how many others have already tried?
-        confidence         — how complete is the data?
+        business_quality   - trust + intent (are they established?)
+        opportunity_gap    - role-matched weakness = your value (high gap = high score)
+        user_fit           - platform alignment with user's service angle
+        contactability     - can we actually reach this business?
+        saturation         - how many others have already tried?
+        confidence         - how complete is the data?
 
     Missing data = lower confidence, NOT lower score.
     Blocked sources = confidence reduction, NOT score collapse.
@@ -1121,7 +1121,7 @@ def compute_opportunity_score_v2(
     saturation = saturation or {}
     context    = context    or {}
 
-    # Pull social_conversion sub-dict — handle both full-signals and bare sc dicts
+    # Pull social_conversion sub-dict - handle both full-signals and bare sc dicts
     sc = signals.get("social_conversion") or signals
 
     service_angle = (
@@ -1135,7 +1135,7 @@ def compute_opportunity_score_v2(
     intent_s = (sc.get("intent_signal") or {}).get("score", 50)
     business_quality = (trust_s * 0.5 + intent_s * 0.5) / 100.0
 
-    # ── 2. Opportunity gap (0–1) — GAP IS THE OPPORTUNITY ────────────────────
+    # ── 2. Opportunity gap (0–1) - GAP IS THE OPPORTUNITY ────────────────────
     attention_s  = (sc.get("attention_signal")       or {}).get("score", 50)
     funnel_s     = (sc.get("funnel_clarity_signal")  or {}).get("score", 50)
     conversion_s = (sc.get("conversion_path_signal") or {}).get("score", 50)
