@@ -139,6 +139,7 @@ ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS contact_confidence TEXT;
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS contact_reason     TEXT;
 
 -- opportunity_states — richer contact tracking
+ALTER TABLE opportunity_states ADD COLUMN IF NOT EXISTS contact_method TEXT;
 ALTER TABLE opportunity_states ADD COLUMN IF NOT EXISTS contact_target TEXT;
 ALTER TABLE opportunity_states ADD COLUMN IF NOT EXISTS service_angle  TEXT;
 
