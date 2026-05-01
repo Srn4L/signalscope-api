@@ -5344,12 +5344,18 @@ def signals_preview():
         )
         sat_label = get_saturation_label(saturation) if _DB_AVAILABLE else {}
 
+        try:
+            score_v2 = compute_opportunity_score_v2(signals, saturation or {}, context)
+        except Exception:
+            score_v2 = score
+
         return jsonify({
-            "ok":              True,
-            "signals":         signals,
-            "contact":         contact,
+            "ok":               True,
+            "signals":          signals,
+            "contact":          contact,
             "saturation_label": sat_label,
-            "score":           score,
+            "score":            score,
+            "score_v2":         score_v2,
         })
     except Exception as e:
         log_error("POST /signals/preview", e)
