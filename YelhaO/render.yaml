@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: signalscope-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 2 --timeout 120 --bind 0.0.0.0:$PORT --preload
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: MASTER_CODE
+        sync: false
+      - key: GUEST_CODES
+        sync: false
+      - key: HUBSPOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: GOOGLE_PLACES_API_KEY
+        sync: false
+      - key: SCRAPER_API_KEY
+        sync: false
+      - key: SERP_API_KEY
+        sync: false
+      - key: N8N_WEBHOOK_URL
+        sync: false
+      - key: AIRTABLE_TOKEN
+        sync: false
+      - key: AIRTABLE_BASE_ID
+        sync: false
+      - key: AIRTABLE_TABLE_ID
+        sync: false
+      - key: SF_CLIENT_ID
+        sync: false
+      - key: SF_CLIENT_SECRET
+        sync: false
+      - key: SF_REFRESH_TOKEN
+        sync: false
+      - key: SF_INSTANCE_URL
+        sync: false
