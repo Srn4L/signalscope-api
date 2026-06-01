@@ -157,6 +157,8 @@ try:
         get_followups_due,
         log_discovery_event,
         save_scout_result_to_network,
+        get_wc_cache,
+        set_wc_cache,
     )
     _DB_AVAILABLE = True
 except (ImportError, SyntaxError) as _db_import_err:
@@ -3248,6 +3250,94 @@ def quick_instagram_check(business_name, website=None):
         return 0
 
 
+# ── World Cup 2026 ────────────────────────────────────────────────────────────
+WC26_HOST_CITIES = {
+    "dallas":       {"venue": "AT&T Stadium",           "state": "TX",
+                     "first_match": "June 12",
+                     "aliases": ["arlington", "fort worth", "dfw"]},
+    "los angeles":  {"venue": "SoFi Stadium",           "state": "CA",
+                     "first_match": "June 12",
+                     "aliases": ["inglewood", "la", "socal", "long beach"]},
+    "san jose":     {"venue": "Levi's Stadium",         "state": "CA",
+                     "first_match": "June 15",
+                     "aliases": ["santa clara", "bay area", "sf", "san francisco", "silicon valley"]},
+    "seattle":      {"venue": "Lumen Field",            "state": "WA",
+                     "first_match": "June 15",
+                     "aliases": ["bellevue", "tacoma", "redmond", "kirkland"]},
+    "kansas city":  {"venue": "Arrowhead Stadium",      "state": "MO",
+                     "first_match": "June 15",
+                     "aliases": ["kc", "overland park", "independence"]},
+    "new york":     {"venue": "MetLife Stadium",        "state": "NJ",
+                     "first_match": "June 13",
+                     "aliases": ["nyc", "new jersey", "east rutherford", "newark",
+                                 "hoboken", "jersey city", "manhattan", "brooklyn",
+                                 "queens", "meadowlands", "secaucus"]},
+    "philadelphia": {"venue": "Lincoln Financial Field", "state": "PA",
+                     "first_match": "June 12",
+                     "aliases": ["philly", "south philly", "camden"]},
+    "boston":       {"venue": "Gillette Stadium",       "state": "MA",
+                     "first_match": "June 17",
+                     "aliases": ["foxborough", "foxboro", "new england", "providence"]},
+    "atlanta":      {"venue": "Mercedes-Benz Stadium",  "state": "GA",
+                     "first_match": "June 14",
+                     "aliases": ["atl", "buckhead", "midtown", "decatur"]},
+    "miami":        {"venue": "Hard Rock Stadium",      "state": "FL",
+                     "first_match": "June 14",
+                     "aliases": ["miami gardens", "south florida", "fort lauderdale",
+                                 "boca raton", "coral gables", "aventura"]},
+    "houston":      {"venue": "NRG Stadium",            "state": "TX",
+                     "first_match": "June 13",
+                     "aliases": ["htx", "sugar land", "katy", "pearland"]},
+    "vancouver":    {"venue": "BC Place",               "state": "BC",
+                     "first_match": "June 11",
+                     "aliases": ["burnaby", "surrey", "richmond", "north vancouver"]},
+    "toronto":      {"venue": "BMO Field",              "state": "ON",
+                     "first_match": "June 12",
+                     "aliases": ["north york", "mississauga", "scarborough", "gta", "etobicoke"]},
+    "mexico city":  {"venue": "Estadio Azteca",         "state": "MX",
+                     "first_match": "June 11",
+                     "aliases": ["cdmx", "df", "naucalpan"]},
+    "guadalajara":  {"venue": "Estadio Akron",          "state": "MX",
+                     "first_match": "June 14",
+                     "aliases": ["zapopan", "tlaquepaque"]},
+    "monterrey":    {"venue": "Estadio BBVA",           "state": "MX",
+                     "first_match": "June 13",
+                     "aliases": ["mty", "san pedro garza garcia", "san nicolas"]},
+}
+
+WC26_HOT_CATEGORIES = {
+    "sports bar", "bar", "restaurant", "food truck", "hotel", "hostel",
+    "fan zone", "event venue", "catering", "nightclub", "merchandise store",
+    "souvenir shop", "tour operator", "transportation service", "pub",
+    "brewery", "cocktail bar", "rooftop bar",
+}
+
+
+def detect_wc26_context(location: str, niche: str) -> dict | None:
+    """Return World Cup 2026 context if location matches a host market, else None."""
+    loc_lower = (location or "").lower()
+    niche_lower = (niche or "").lower()
+    for city, data in WC26_HOST_CITIES.items():
+        if city in loc_lower or any(a in loc_lower for a in data["aliases"]):
+            is_hot = any(c in niche_lower for c in WC26_HOT_CATEGORIES)
+            first_match = data.get("first_match", "June 2026")
+            venue = data["venue"]
+            return {
+                "host_city":        city.title(),
+                "venue":            venue,
+                "first_match_date": first_match,
+                "is_hot_category":  is_hot,
+                "tournament":       "FIFA World Cup 2026",
+                "timing_label":     "urgent",
+                "why_now": (
+                    f"FIFA World Cup 2026 brings matches to this market starting {first_match} "
+                    f"at {venue}. Businesses near the venue face a time-sensitive demand surge "
+                    f"from fans, tourists, and media -- creating a narrow window to prepare now."
+                ),
+            }
+    return None
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # SCOUT: MODE-AWARE SCORING SYSTEM
 # ═══════════════════════════════════════════════════════════════════════════
@@ -4559,7 +4649,7 @@ def estimate_growth_metrics(lead, niche=''):
 
 def search_google_places(niche, location, limit=10):
     import requests as req
-    key = os.environ.get("GOOGLE_PLACES_KEY", "")
+    key = os.environ.get("GOOGLE_PLACES_API_KEY", "")
     if not key:
         return []
     try:
@@ -4686,7 +4776,7 @@ def geocode_business(business_name, address=None, location=None):
     Returns (lat, lng) for a business using Google Geocoding API.
     Tries address first, falls back to business name + location.
     '''
-    key = os.environ.get('GOOGLE_PLACES_KEY', '')
+    key = os.environ.get('GOOGLE_PLACES_API_KEY', '')
     if not key:
         return None, None
     try:
@@ -4712,7 +4802,7 @@ def nearby_competitors_google(lat, lng, niche, radius_m=1500, limit=8):
     Uses Google Places Nearby Search to find actual nearby competitors.
     Returns structured competitor cards with real ratings, price level, and distance.
     '''
-    key = os.environ.get('GOOGLE_PLACES_KEY', '')
+    key = os.environ.get('GOOGLE_PLACES_API_KEY', '')
     if not key or not lat or not lng:
         return []
     try:
@@ -5124,17 +5214,28 @@ def prospect():
     niche_validation = validate_niche(niche)
     if niche_validation["quality_score"] < 50:
         print(f"  [i] Low-quality niche: {niche} (score: {niche_validation['quality_score']})")
+
+    wc26_context = detect_wc26_context(location, niche)
+    if wc26_context:
+        print(f"  [WC26] host market detected: {wc26_context['host_city']} / {wc26_context['venue']}", flush=True)
  
     print(f"  -> Scout [{mode}]: {niche} in {location}, r={radius_miles}mi, limit={limit}")
     sys.stdout.flush()
     fetch_limit = min(limit * 4, 60)  # overfetch then trim after scoring
     raw = []
 
+    _wc_cached = None
+    if wc26_context and _DB_AVAILABLE and not is_refresh:
+        _wc_cached = get_wc_cache(niche, location)
+        if _wc_cached:
+            raw = _wc_cached
+            print(f"  [WC26] cache hit: {len(raw)} results for {niche} in {location}", flush=True)
+
     # ── Primary discovery: Google Places Nearby (radius) or Text Search ───────
-    gp_key = os.environ.get("GOOGLE_PLACES_KEY", "")
+    gp_key = os.environ.get("GOOGLE_PLACES_API_KEY", "")
     used_nearby = False
 
-    if gp_key and radius_miles > 0:
+    if not raw and gp_key and radius_miles > 0:
         lat, lng = geocode_business(None, None, location)
         if lat and lng:
             radius_m = int(radius_miles * 1609)
@@ -5315,6 +5416,11 @@ def prospect():
     for biz in qualified:
         score_data = score_and_explain(biz, mode, soft_preferences, exclusions)
         biz.update(score_data)
+        if wc26_context:
+            _wc_boost = 12 if wc26_context.get("is_hot_category") else 5
+            biz["opportunity_score"] = min(96, (biz.get("opportunity_score") or 0) + _wc_boost)
+            if not biz.get("why_now"):
+                biz["why_now"] = wc26_context["why_now"]
         scored.append(biz)
 
     # Sort by opportunity_score first, then by quality tiebreakers so
@@ -5377,6 +5483,13 @@ def prospect():
         for i, b in enumerate(top_results[:5], 1):
             print(f"     #{i}: {b['business_name']} - score {b['opportunity_score']}/100 ({b['score_confidence']} confidence)")
     sys.stdout.flush()
+
+    if wc26_context and _DB_AVAILABLE and not _wc_cached and top_results:
+        try:
+            set_wc_cache(niche, location, top_results, source="google_places")
+            print(f"  [WC26] cached {len(top_results)} results for {niche}/{location}", flush=True)
+        except Exception as _wc_err:
+            log_error("wc26 cache write", _wc_err)
 
     # ── Discovery tracking - Scout previews, does NOT create Network entries ────
     if _DB_AVAILABLE:
@@ -5491,6 +5604,7 @@ def prospect():
         "niche_intelligence":  niche_intelligence or None,
         "ranking_strategy":    ranking_strategy,
         "result_mix":          lane_counts,
+        "world_cup_context":   wc26_context,
         "refresh": {
             "active":        is_refresh,
             "strategy":      refresh_strategy_data.get("strategy"),
@@ -5533,6 +5647,60 @@ def init_db_route():
     if ok:
         return jsonify({"ok": True, "message": "Database initialized"})
     return jsonify({"ok": False, "error": error}), 500
+
+
+@app.route('/warmup', methods=['POST'])
+def warmup():
+    """Pre-warm Postgres WC cache for top World Cup searches. Master token only."""
+    code_type = get_code_type(request)
+    if code_type != "master":
+        return jsonify({"error": "Master token required"}), 401
+    if not _DB_AVAILABLE:
+        return jsonify({"error": "Database not available"}), 503
+
+    import threading
+
+    WC_WARM_QUERIES = [
+        ("sports bar",  "Dallas, TX"),
+        ("restaurant",  "Dallas, TX"),
+        ("bar",         "New York, NJ"),
+        ("restaurant",  "New York, NJ"),
+        ("restaurant",  "Los Angeles, CA"),
+        ("sports bar",  "Los Angeles, CA"),
+        ("bar",         "Miami, FL"),
+        ("hotel",       "Miami, FL"),
+        ("food truck",  "Houston, TX"),
+        ("sports bar",  "Atlanta, GA"),
+        ("bar",         "Philadelphia, PA"),
+        ("restaurant",  "Seattle, WA"),
+        ("sports bar",  "Kansas City, MO"),
+        ("restaurant",  "San Jose, CA"),
+        ("bar",         "Boston, MA"),
+    ]
+
+    def _warm(niche, location):
+        try:
+            existing = get_wc_cache(niche, location)
+            if existing:
+                print(f"[Warmup] already cached: {niche} / {location}", flush=True)
+                return
+            raw = search_google_places(niche, location, limit=20)
+            if raw:
+                set_wc_cache(niche, location, raw, source="warmup")
+                print(f"[Warmup] cached {len(raw)} results: {niche} / {location}", flush=True)
+            else:
+                print(f"[Warmup] no results for {niche} / {location}", flush=True)
+        except Exception as e:
+            print(f"[Warmup] error {niche}/{location}: {e}", flush=True)
+
+    for niche, location in WC_WARM_QUERIES:
+        threading.Thread(target=_warm, args=(niche, location), daemon=True).start()
+
+    return jsonify({
+        "ok":      True,
+        "warming": len(WC_WARM_QUERIES),
+        "message": "World Cup cache warming started -- results will be in Postgres within ~30 seconds.",
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -192,3 +192,18 @@ CREATE INDEX IF NOT EXISTS idx_sat_business ON opportunity_saturation(business_i
 CREATE INDEX IF NOT EXISTS idx_sat_angle    ON opportunity_saturation(service_angle);
 CREATE INDEX IF NOT EXISTS idx_sat_contact  ON opportunity_saturation(contact_method);
 CREATE INDEX IF NOT EXISTS idx_sat_lookup   ON opportunity_saturation(business_id, opportunity_type, service_angle, contact_target, contact_method);
+
+-- World Cup 2026 shared opportunity cache (all workers share via Postgres)
+CREATE TABLE IF NOT EXISTS worldcup_opportunity_cache (
+    id           SERIAL PRIMARY KEY,
+    cache_key    TEXT NOT NULL UNIQUE,
+    niche        TEXT,
+    location     TEXT,
+    results_json JSONB,
+    source       TEXT,
+    created_at   TIMESTAMP DEFAULT NOW(),
+    refreshed_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_wc_cache_key ON worldcup_opportunity_cache(cache_key);
+CREATE INDEX IF NOT EXISTS idx_wc_cache_loc ON worldcup_opportunity_cache(niche, location);

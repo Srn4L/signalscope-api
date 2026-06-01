@@ -1324,3 +1324,46 @@ def get_candidate_exposure_stats(
     except Exception as exc:
         print(f"[DB] get_candidate_exposure_stats error: {exc}", flush=True)
         return {_norm_key(c): dict(empty_stats) for c in candidates}
+
+
+def get_wc_cache(niche: str, location: str) -> list | None:
+    """Return cached World Cup results for this niche+location, or None if missing/stale."""
+    from sqlalchemy import text as _text
+    key = f"{niche.lower().strip()}|{location.lower().strip()}"
+    try:
+        with get_db_session() as session:
+            row = session.execute(_text("""
+                SELECT results_json, refreshed_at
+                FROM worldcup_opportunity_cache
+                WHERE cache_key = :key
+                  AND refreshed_at > NOW() - INTERVAL '2 hours'
+            """), {"key": key}).mappings().fetchone()
+            if row and row["results_json"]:
+                return row["results_json"]
+    except Exception as exc:
+        print(f"[DB] get_wc_cache error: {exc}", flush=True)
+    return None
+
+
+def set_wc_cache(niche: str, location: str, results: list, source: str = "google_places") -> bool:
+    """Upsert cached World Cup results for this niche+location."""
+    import json as _json
+    from sqlalchemy import text as _text
+    key = f"{niche.lower().strip()}|{location.lower().strip()}"
+    try:
+        with get_db_session() as session:
+            session.execute(_text("""
+                INSERT INTO worldcup_opportunity_cache
+                    (cache_key, niche, location, results_json, source, refreshed_at)
+                VALUES
+                    (:key, :niche, :location, CAST(:results AS JSONB), :source, NOW())
+                ON CONFLICT (cache_key) DO UPDATE SET
+                    results_json = EXCLUDED.results_json,
+                    source       = EXCLUDED.source,
+                    refreshed_at = NOW()
+            """), {"key": key, "niche": niche, "location": location,
+                   "results": _json.dumps(results), "source": source})
+        return True
+    except Exception as exc:
+        print(f"[DB] set_wc_cache error: {exc}", flush=True)
+        return False

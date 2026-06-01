@@ -214,6 +214,13 @@ _ADJACENT_MAP: dict[str, list[str]] = {
     "chiropractor":      ["physical therapist", "massage therapist", "wellness center"],
     "car wash":          ["auto detailing", "auto repair", "mechanic"],
     "laundromat":        ["dry cleaner", "alterations", "cleaning service"],
+    "sports bar":        ["bar", "restaurant", "lounge", "event venue", "nightclub", "fan zone", "pub"],
+    "fan zone":          ["sports bar", "bar", "event venue", "restaurant", "food truck"],
+    "hotel":             ["hostel", "restaurant", "bar", "tour operator", "transportation service"],
+    "food truck":        ["restaurant", "bar", "catering", "event venue", "food hall"],
+    "merchandise store": ["souvenir shop", "sports bar", "fan zone", "gift shop"],
+    "pub":               ["sports bar", "bar", "restaurant", "lounge"],
+    "rooftop bar":       ["bar", "lounge", "event venue", "cocktail bar"],
 }
 
 
