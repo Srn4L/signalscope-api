@@ -893,6 +893,13 @@ h1 em{color:var(--accent);font-style:normal;position:relative;}
 .scout-result-mix{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
 .mix-chip{font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:3px 9px;border-radius:10px;border:1px solid var(--border);color:var(--muted);}
 .scout-refresh-banner{font-size:10px;color:var(--muted2);background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;margin-bottom:10px;}
+.scout-wc-banner{display:flex;gap:14px;padding:14px 16px;margin:0 0 14px;background:rgba(46,232,160,.06);border:1px solid rgba(46,232,160,.25);border-radius:10px;align-items:flex-start;}
+.scout-wc-banner-icon{font-size:22px;line-height:1;padding-top:2px;}
+.scout-wc-banner-body{flex:1;}
+.scout-wc-banner-title{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:4px;}
+.scout-wc-banner-venue{font-size:10px;color:var(--muted);margin-bottom:6px;}
+.scout-wc-banner-why{font-size:10px;color:var(--text);line-height:1.5;}
+.scout-wc-badge{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;padding:2px 8px;border-radius:10px;border:1px solid rgba(46,232,160,.3);color:var(--accent);background:rgba(46,232,160,.1);vertical-align:middle;margin-left:6px;}
 .demo-notice{font-size:10px;color:var(--muted);text-align:center;margin-bottom:20px;padding:10px;border:1px solid var(--border);border-radius:6px;opacity:.7;}
 
     /* Niche warning banner */
@@ -4256,6 +4263,18 @@ function renderScoutResults(data) {
       <div class="niche-warning-body">
         <div class="niche-warning-msg">${esc(w.message)}</div>
         ${chips ? `<div class="niche-warning-suggestions">Try instead: ${chips}</div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  const wc = data.world_cup_context;
+  if (wc) {
+    html += `<div class="scout-wc-banner">
+      <div class="scout-wc-banner-icon">&#9917;</div>
+      <div class="scout-wc-banner-body">
+        <div class="scout-wc-banner-title">FIFA World Cup 2026 Host Market<span class="scout-wc-badge">Urgent</span></div>
+        <div class="scout-wc-banner-venue">${esc(wc.venue)} &middot; ${esc(wc.host_city)} &middot; First match: ${esc(wc.first_match_date)}</div>
+        <div class="scout-wc-banner-why">${esc(wc.why_now)}</div>
       </div>
     </div>`;
   }
