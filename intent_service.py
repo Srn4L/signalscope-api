@@ -44,20 +44,28 @@ _LOCATION_ABBREVS: dict[str, str] = {
 # Business category normalization
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _category_trigger_hit(trigger: str, haystack: str) -> bool:
+    """Whole-word match, allowing a plural s/es ("nails", "barbershops")."""
+    return re.search(r"\b" + re.escape(trigger) + r"(s|es)?\b", haystack) is not None
+
+
 _CATEGORY_MAP: list[tuple[list[str], str, list[str]]] = [
     # (trigger words, canonical category, expanded_categories)
     (["restaurant", "food spot", "food spots", "eatery", "diner", "spot to eat"],
      "restaurant", ["restaurant", "cafe", "food truck", "bistro"]),
     (["cafe", "coffee shop", "coffee"],
      "cafe", ["cafe", "coffee shop", "bakery"]),
-    (["bar", "lounge", "nightclub", "club"],
-     "bar", ["bar", "lounge", "nightclub"]),
-    (["salon", "hair salon", "hair"],
-     "hair salon", ["hair salon", "barbershop", "nail salon"]),
-    (["barber", "barbershop", "barbershops"],
-     "barbershop", ["barbershop", "hair salon"]),
+    # Specific beauty categories come before the generic "salon" entry, and
+    # matching is whole-word (see _category_trigger_hit), so "nail salon" is
+    # not read as a hair salon and "barbershop" is not read as a bar.
     (["nail", "nails", "nail salon"],
      "nail salon", ["nail salon", "beauty salon"]),
+    (["barber", "barbershop", "barbershops"],
+     "barbershop", ["barbershop", "hair salon"]),
+    (["bar", "lounge", "nightclub", "club"],
+     "bar", ["bar", "lounge", "nightclub"]),
+    (["salon", "hair salon", "hair", "haircut", "hairstylist", "hair stylist", "hairdresser"],
+     "hair salon", ["hair salon", "barbershop", "nail salon"]),
     (["gym", "fitness", "crossfit", "yoga", "pilates"],
      "gym", ["gym", "fitness studio", "yoga studio", "pilates"]),
     (["spa", "med spa", "medspa", "wellness"],
@@ -199,7 +207,7 @@ def parse_user_intent(raw_query: str, explicit_fields: dict | None = None) -> di
     expanded_categories: list[str] = []
     if not business_category:
         for triggers, cat, expanded in _CATEGORY_MAP:
-            if any(t in haystack for t in triggers):
+            if any(_category_trigger_hit(t, haystack) for t in triggers):
                 business_category = cat
                 expanded_categories = expanded
                 break
