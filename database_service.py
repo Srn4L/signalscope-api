@@ -50,7 +50,7 @@ def _as_json(value):
 def init_db():
     schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
     try:
-        with open(schema_path, "r") as f:
+        with open(schema_path, "r", encoding="utf-8") as f:
             sql = f.read()
     except FileNotFoundError:
         return False, f"schema.sql not found at {schema_path}"
@@ -58,11 +58,12 @@ def init_db():
     try:
         from db import _get_engine
         engine = _get_engine()
-        statements = [s.strip() for s in sql.split(";") if s.strip() and not s.strip().startswith("--")]
-        with engine.connect() as conn:
-            for stmt in statements:
-                conn.execute(text(stmt))
-            conn.commit()
+        # Send the whole script to PostgreSQL in one call so the server parses
+        # comments, quoting and statement boundaries. engine.begin() wraps it in
+        # a single transaction: commit on success, rollback on any error.
+        # no_parameters stops psycopg2 treating "%" in the SQL as placeholders.
+        with engine.begin() as conn:
+            conn.execution_options(no_parameters=True).exec_driver_sql(sql)
         return True, None
     except Exception as exc:
         return False, str(exc)
