@@ -207,3 +207,15 @@ CREATE TABLE IF NOT EXISTS worldcup_opportunity_cache (
 
 CREATE INDEX IF NOT EXISTS idx_wc_cache_key ON worldcup_opportunity_cache(cache_key);
 CREATE INDEX IF NOT EXISTS idx_wc_cache_loc ON worldcup_opportunity_cache(niche, location);
+
+-- Daily usage counters for cost limits (per demo IP, per access code, global).
+-- Keys are hashes, never raw IPs or codes. Also created on first use by the app.
+CREATE TABLE IF NOT EXISTS usage_counters (
+    day        DATE    NOT NULL,
+    scope      TEXT    NOT NULL,
+    key        TEXT    NOT NULL,
+    kind       TEXT    NOT NULL,
+    count      INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (day, scope, key, kind)
+);

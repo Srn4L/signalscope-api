@@ -1326,3 +1326,46 @@ def get_candidate_exposure_stats(
         print(f"[DB] get_candidate_exposure_stats error: {exc}", flush=True)
         return {_norm_key(c): dict(empty_stats) for c in candidates}
 
+
+# ---------------------------------------------------------------------------
+# Daily usage counters (cost limits)
+# ---------------------------------------------------------------------------
+
+_USAGE_TABLE_READY = False
+
+
+def increment_usage(day, scope: str, key: str, kind: str, amount: int = 1) -> int | None:
+    """
+    Atomically add `amount` to one daily usage counter and return the new total.
+    Pass a negative amount to undo a reservation. Returns None if the database
+    is unavailable, so callers can decide how to fail.
+    The table is created on first use, so no /init-db run is needed.
+    """
+    global _USAGE_TABLE_READY
+    try:
+        with get_db_session() as session:
+            if not _USAGE_TABLE_READY:
+                session.execute(text("""
+                    CREATE TABLE IF NOT EXISTS usage_counters (
+                        day        DATE    NOT NULL,
+                        scope      TEXT    NOT NULL,
+                        key        TEXT    NOT NULL,
+                        kind       TEXT    NOT NULL,
+                        count      INTEGER NOT NULL DEFAULT 0,
+                        updated_at TIMESTAMP DEFAULT NOW(),
+                        PRIMARY KEY (day, scope, key, kind)
+                    )
+                """))
+            row = session.execute(text("""
+                INSERT INTO usage_counters (day, scope, key, kind, count)
+                VALUES (:day, :scope, :key, :kind, :amount)
+                ON CONFLICT (day, scope, key, kind) DO UPDATE
+                    SET count = usage_counters.count + EXCLUDED.count,
+                        updated_at = NOW()
+                RETURNING count
+            """), {"day": day, "scope": scope, "key": key, "kind": kind, "amount": amount}).fetchone()
+        _USAGE_TABLE_READY = True
+        return int(row[0]) if row else None
+    except Exception as exc:
+        print(f"[DB] increment_usage error: {exc}", flush=True)
+        return None

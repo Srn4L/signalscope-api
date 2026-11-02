@@ -157,6 +157,7 @@ try:
         get_followups_due,
         log_discovery_event,
         save_scout_result_to_network,
+        increment_usage,
     )
     _DB_AVAILABLE = True
 except (ImportError, SyntaxError) as _db_import_err:
@@ -232,6 +233,100 @@ CORS(app)
 def hash_token(raw: str) -> str:
     '''SHA-256 of the raw token - we never store the raw code.'''
     return hashlib.sha256((raw or "").strip().lower().encode()).hexdigest()
+
+# --- COST LIMITS --------------------------------------------------------------
+# Daily caps that bound API spend no matter how codes are shared. Counters live
+# in Postgres (usage_counters) so restarts do not reset them. The master code is
+# exempt. Every number can be changed with a Render env var, no deploy needed.
+# Defaults keep worst-case spend under about $10/day (Nov 2026 prices: a Scout
+# search is up to ~$0.20 of Google calls, a deep analysis up to ~$0.50 of
+# Google + GPT-4o + Claude). A limit of 0 turns that feature off for guests.
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+COST_LIMITS = {
+    # (scope, kind): daily limit
+    ("demo_ip", "search"):     _env_int("LIMIT_DEMO_SEARCHES_PER_IP", 3),
+    ("code",    "search"):     _env_int("LIMIT_CODE_SEARCHES", 25),
+    ("code",    "analysis"):   _env_int("LIMIT_CODE_ANALYSES", 2),
+    ("code",    "batch_item"): _env_int("LIMIT_CODE_BATCH_ITEMS", 0),
+    ("global",  "search"):     _env_int("LIMIT_GLOBAL_SEARCHES", 55),
+    ("global",  "analysis"):   _env_int("LIMIT_GLOBAL_ANALYSES", 5),
+    ("global",  "batch_item"): _env_int("LIMIT_GLOBAL_BATCH_ITEMS", 0),
+}
+
+_KIND_LABEL = {"search": "searches", "analysis": "analyses", "batch_item": "batch analyses"}
+
+
+def client_ip(req) -> str:
+    """
+    Real client IP behind Render's proxy. Render sits behind Cloudflare, which
+    sets True-Client-IP / CF-Connecting-IP (not client-spoofable). The first
+    X-Forwarded-For entry is the fallback. remote_addr is Render's internal proxy.
+    """
+    for header in ("True-Client-IP", "CF-Connecting-IP"):
+        value = (req.headers.get(header) or "").strip()
+        if value:
+            return value
+    xff = (req.headers.get("X-Forwarded-For") or "").strip()
+    if xff:
+        return xff.split(",")[0].strip()
+    return req.remote_addr or "unknown"
+
+
+def enforce_cost_limit(req, code_type, kind, amount=1):
+    """
+    Reserve `amount` units of `kind` ("search", "analysis", "batch_item") for
+    today (UTC). Returns None when allowed, or a (json_response, 429) tuple when
+    a limit would be exceeded. Reservations are undone when any check fails.
+    Fails open (allows) if the database is unavailable, and logs it.
+    """
+    if code_type == "master" or not _DB_AVAILABLE or amount <= 0:
+        return None
+
+    if code_type == "demo":
+        scopes = [("demo_ip", hash_token("ip:" + client_ip(req)))]
+    else:
+        scopes = [("code", get_token_hash(req) or "none")]
+    scopes.append(("global", "all"))
+
+    from datetime import datetime as _dt, timezone as _tz
+    day = _dt.now(_tz.utc).date()
+    reserved = []
+    for scope, key in scopes:
+        limit = COST_LIMITS.get((scope, kind))
+        if limit is None:
+            continue
+        total = increment_usage(day, scope, key, kind, amount)
+        if total is None:
+            print(f"  [Limit] counter unavailable for {scope}/{kind}; allowing request", flush=True)
+            continue
+        reserved.append((scope, key))
+        if total > limit:
+            for r_scope, r_key in reserved:
+                increment_usage(day, r_scope, r_key, kind, -amount)
+            label = _KIND_LABEL.get(kind, kind)
+            if limit == 0:
+                msg = (f"{label[0].upper() + label[1:]} aren't available on access codes yet. "
+                       f"Contact Stanley if you need them.")
+            elif scope == "demo_ip":
+                msg = (f"You've used today's {limit} free demo {label}. "
+                       f"Request an access code to keep going, or come back tomorrow.")
+            elif scope == "code":
+                msg = (f"Your access code has reached today's limit of {limit} {label}. "
+                       f"It resets tomorrow.")
+            else:
+                msg = "Yelhao is at capacity for today. Please try again tomorrow."
+            print(f"  [Limit] blocked {kind} x{amount}: {scope} at {total - amount}/{limit} "
+                  f"(code_type={code_type})", flush=True)
+            return jsonify({"ok": False, "error": msg, "limit_type": scope,
+                            "limit_kind": kind, "limit": limit}), 429
+    return None
+
 
 def get_token_hash(req) -> str | None:
     raw = req.headers.get("X-Agent-Token", "").strip().lower()
@@ -2585,6 +2680,10 @@ def agent():
         if business_name and not location:
             return jsonify({"error": "Add a location, website, or social profile so Yelhao can find reliable public signals."}), 400
         return jsonify({"error": "Provide at least one: website URL, social profile, or business name + location"}), 400
+
+    _limit = enforce_cost_limit(request, code_type, "analysis")
+    if _limit:
+        return _limit
 
     # -- Identity-led discovery (if no website/social provided) ---------------
     analysis_mode     = "website_led" if has_website else "social_led" if has_socials else "identity_led"
@@ -5110,6 +5209,10 @@ def prospect():
     if not niche or not location:
         return jsonify({"error": "niche and location are required"}), 400
 
+    _limit = enforce_cost_limit(request, code_type, "search")
+    if _limit:
+        return _limit
+
     try:
         limit = max(1, min(int(body.get('limit') or 10), 25))
     except (ValueError, TypeError):
@@ -6242,6 +6345,10 @@ def batch_analyze():
     if len(items) > 100:
         return jsonify({"ok": False, "error": "Max 100 contacts per batch"}), 400
 
+    _limit = enforce_cost_limit(request, get_code_type(request), "batch_item", len(items))
+    if _limit:
+        return _limit
+
     batch_id = str(uuid.uuid4())[:8]
     BATCH_JOBS[batch_id] = {"status": "running", "items": items, "results": [], "progress": {}, "ts": time.time()}
 
@@ -6391,6 +6498,13 @@ def batch_csv_start():
             first_val = next(iter(row.values()),"").strip()
             item["business_name"] = first_val
         items.append(item)
+
+    if len(items) > 100:
+        return jsonify({"ok": False, "error": "Max 100 rows per batch. Split the CSV and try again."}), 400
+
+    _limit = enforce_cost_limit(request, get_code_type(request), "batch_item", len(items))
+    if _limit:
+        return _limit
 
     BATCH_JOBS[batch_id]["status"]  = "running"
     BATCH_JOBS[batch_id]["items"]   = items
