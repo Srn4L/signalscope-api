@@ -5528,6 +5528,8 @@ def prospect():
             "discovery_reason":    b.get("discovery_reason"),
             "verification_status": b.get("verification_status"),
             "why_now":             b.get("why_now", ""),
+            # True when this code already saved the business to Network (from saturation rerank)
+            "already_saved":       bool((b.get("exposure") or {}).get("already_saved_by_token")),
         }
         if b.get("refresh_metadata"):
             card["refresh_metadata"] = b["refresh_metadata"]

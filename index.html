@@ -2047,12 +2047,18 @@ function getCodeType() {
   return localStorage.getItem(CODE_TYPE_KEY) || sessionStorage.getItem(CODE_TYPE_KEY) || 'guest';
 }
 
-function openModal() {
+// Action to resume after a successful unlock (set by whoever opened the modal).
+// Without one, unlocking just closes the modal instead of starting an analysis.
+let _afterUnlock = null;
+
+function openModal(onUnlock) {
+  _afterUnlock = typeof onUnlock === 'function' ? onUnlock : null;
   $('accessModal').classList.add('open');
   setTimeout(() => $('accessCodeInput').focus(), 100);
 }
 
 function closeModal() {
+  _afterUnlock = null;
   $('accessModal').classList.remove('open');
   $('accessCodeInput').value = '';
   $('modalErr').classList.remove('on');
@@ -2084,9 +2090,10 @@ async function submitAccessCode() {
         sessionStorage.setItem(ACCESS_KEY, code);
         sessionStorage.setItem(CODE_TYPE_KEY, data.code_type);
       }
+      const resume = _afterUnlock;
       closeModal();
       updateAccessUI();
-      runAnalysis();
+      if (resume) resume();
     } else {
       $('modalErr').classList.add('on');
       $('accessCodeInput').value = '';
@@ -2793,7 +2800,7 @@ function analyze() {
   }
 
   if (!isUnlocked()) {
-    openModal();
+    openModal(runAnalysis);
   } else {
     runAnalysis();
   }
@@ -2854,7 +2861,7 @@ async function runAnalysis() {
       $('loader').classList.remove('on');
       $('formArea').style.display = 'block';
       $('analyzeBtn').disabled = false;
-      openModal();
+      openModal(runAnalysis);
       return;
     }
 
@@ -4467,7 +4474,9 @@ function renderScoutResults(data) {
             niche: data.niche || '',
           }).replace(/"/g,'&quot;')})">Preview Signals</button>
           <button class="btn-analyze-save" onclick="deepAnalyzeLead(${leadPayload})">Analyze →</button>
-          <button class="btn-save-network" id="netBtn_${idx}" onclick="saveToNetwork(this, ${networkPayload})">+ Network</button>
+          ${biz.already_saved
+            ? `<button class="btn-save-network saved" id="netBtn_${idx}" disabled>✓ Saved</button>`
+            : `<button class="btn-save-network" id="netBtn_${idx}" onclick="saveToNetwork(this, ${networkPayload})">+ Network</button>`}
         </div>
       </div>
     </div>`;
@@ -4489,7 +4498,7 @@ function renderScoutResults(data) {
 
 async function saveToNetwork(button, payload) {
   const token = getToken();
-  if (!token) { openModal(); return; }
+  if (!token) { openModal(() => saveToNetwork(button, payload)); return; }
   const origText = button.textContent;
   button.disabled = true;
   button.textContent = 'Saving...';
