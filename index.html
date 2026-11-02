@@ -4087,6 +4087,12 @@ function refreshScout() {
     .then(data => {
       clearInterval(st);
       loader.classList.remove('on');
+      if (data.limit_type) {
+        const err = $('prospectError');
+        err.textContent = data.error;
+        err.classList.add('on');
+        return;
+      }
       if (data.refresh && data.refresh.next_cursor) {
         scoutRefreshCursor = data.refresh.next_cursor;
       }
@@ -4196,7 +4202,8 @@ async function runProspect(niche, location, mode, goal, _inferred) {
       return;
     }
     if (res.status === 429) {
-      errBox.textContent = 'Rate limit reached — try again in a few minutes.';
+      const limitData = await res.json().catch(() => ({}));
+      errBox.textContent = limitData.error || 'Rate limit reached — try again in a few minutes.';
       errBox.classList.add('on');
       return;
     }
