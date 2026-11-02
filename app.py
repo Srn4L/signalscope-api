@@ -567,9 +567,10 @@ def search_web(query, max_results=6):
                 if snippets:
                     return snippets
                 # SerpAPI returned 200 but no organic results (quota/plan limit)
-                print(f"[Search] SerpAPI 200 but 0 results for query={query!r:.60} — falling back to DDG", flush=True)
+                print(f"[Search] SerpAPI 200 but 0 results for query={query!r:.60} "
+                      f"(serpapi_error={str(data.get('error', ''))[:150]!r}) - falling back to DDG", flush=True)
             else:
-                print(f"[Search] SerpAPI HTTP {r.status_code} — falling back to DDG", flush=True)
+                print(f"[Search] SerpAPI HTTP {r.status_code} ({r.text[:150]!r}) - falling back to DDG", flush=True)
         except Exception as e:
             log_error("SerpAPI search", e, fallback="DuckDuckGo")
     else:
@@ -4561,6 +4562,7 @@ def search_google_places(niche, location, limit=10):
     import requests as req
     key = os.environ.get("GOOGLE_PLACES_API_KEY", "")
     if not key:
+        print("  [Provider] Google Places skipped: GOOGLE_PLACES_API_KEY is not set", flush=True)
         return []
     try:
         r = req.get(
@@ -4568,8 +4570,14 @@ def search_google_places(niche, location, limit=10):
             params={"query": f"{niche} in {location}", "key": key, "type": "establishment"},
             timeout=8
         )
+        data = r.json()
+        _gp_status = data.get("status", "")
+        if _gp_status not in ("OK", "ZERO_RESULTS"):
+            print(f"  [Provider] Google Places Text Search failed: HTTP {r.status_code}, "
+                  f"status={_gp_status or 'none'}, message={data.get('error_message', '')[:200]}", flush=True)
+            return []
         results = []
-        for p in r.json().get("results", [])[:limit]:
+        for p in data.get("results", [])[:limit]:
             name     = p.get("name", "").strip()
             place_id = p.get("place_id", "")
             if not name or len(name) < 3:
@@ -4595,39 +4603,86 @@ def search_google_places(niche, location, limit=10):
                 "rating":        p.get("rating", 0),
                 "review_count":  p.get("user_ratings_total", 0),
             })
-            time.sleep(1)
-        print(f"  -> Google Places: {len(results)} results")
+        print(f"  -> Google Places: {len(results)} results (status={_gp_status})")
         return results
     except Exception as e:
         log_error("Google Places search", e)
         return []
 
 
+# Niche keyword -> Geoapify category. Checked in order, so specific entries
+# (hair, med spa) come before general ones (salon, spa). Keywords match whole
+# words (plurals allowed), so "space" does not match "spa". Only category keys
+# confirmed in Geoapify's Places docs are used. Geoapify has no nail category,
+# so nails fall under the general beauty category.
+GEOAPIFY_NICHE_CATEGORIES = [
+    (("hair", "hairdresser", "barber", "barbershop"),   "service.beauty.hairdresser"),
+    (("massage",),                                     "service.beauty.massage"),
+    (("tattoo",),                                      "service.beauty.tattoo"),
+    (("tanning",),                                     "service.beauty.tanning_salon"),
+    (("spa", "medspa"),                                "service.beauty.spa"),
+    (("nail", "lash", "eyelash", "brow", "eyebrow", "waxing",
+      "beauty", "salon", "makeup", "esthetician"),     "service.beauty"),
+    (("cafe", "coffee", "bakery", "dessert"),          "catering.cafe"),
+    (("restaurant", "food", "pizza", "pizzeria", "sushi",
+      "taco", "burger", "diner", "eatery"),            "catering.restaurant"),
+    (("gym", "fitness", "pilates", "yoga", "crossfit"), "sport.fitness"),
+    (("dentist", "dental", "orthodontist", "orthodontics"), "healthcare.dentist"),
+    (("vet", "veterinarian", "veterinary"),             "pet.veterinary"),
+    (("groomer", "grooming", "pet"),                    "pet.service"),
+    (("car wash",),                                    "service.vehicle.car_wash"),
+    (("auto repair", "mechanic", "car repair", "auto shop"), "service.vehicle.repair"),
+]
+
+
+def geoapify_category_for(niche):
+    niche_lower = (niche or "").lower()
+    for keywords, category in GEOAPIFY_NICHE_CATEGORIES:
+        for k in keywords:
+            if re.search(r"\b" + re.escape(k) + r"(s|es)?\b", niche_lower):
+                return category
+    return None
+
+
 def search_geoapify(niche, location, limit=10):
     import requests as req
     key = os.environ.get("GEOAPIFY_KEY", "")
     if not key:
+        print("  [Provider] Geoapify skipped: GEOAPIFY_KEY is not set", flush=True)
+        return []
+    category = geoapify_category_for(niche)
+    if not category:
+        print(f"  [Provider] Geoapify skipped: no category mapping for niche {niche!r}", flush=True)
         return []
     try:
-        geo = req.get(
+        geo_r = req.get(
             "https://api.geoapify.com/v1/geocode/search",
             params={"text": location, "apiKey": key, "limit": 1},
             timeout=5
-        ).json()
-        features = geo.get("features", [])
+        )
+        if geo_r.status_code != 200:
+            print(f"  [Provider] Geoapify geocode failed: HTTP {geo_r.status_code}, {geo_r.text[:200]}", flush=True)
+            return []
+        features = geo_r.json().get("features", [])
         if not features:
+            print(f"  [Provider] Geoapify geocode found no match for location {location!r}", flush=True)
             return []
         lon, lat = features[0]["geometry"]["coordinates"]
-        r = req.get(
+        places_r = req.get(
             "https://api.geoapify.com/v2/places",
             params={
-                "categories": "commercial.beauty_and_spa,commercial.health",
+                "categories": category,
                 "filter":     f"circle:{lon},{lat},3000",
                 "limit":      limit,
                 "apiKey":     key,
             },
             timeout=8
-        ).json()
+        )
+        if places_r.status_code != 200:
+            print(f"  [Provider] Geoapify places failed: HTTP {places_r.status_code}, "
+                  f"category={category}, {places_r.text[:200]}", flush=True)
+            return []
+        r = places_r.json()
         results = []
         for f in r.get("features", []):
             props = f.get("properties", {})
@@ -4644,7 +4699,7 @@ def search_geoapify(niche, location, limit=10):
                 "rating":        0,
                 "review_count":  0,
             })
-        print(f"  -> Geoapify: {len(results)} results")
+        print(f"  -> Geoapify: {len(results)} results (category={category})")
         return results
     except Exception as e:
         log_error("Geoapify search", e)
@@ -4697,7 +4752,11 @@ def geocode_business(business_name, address=None, location=None):
             params={'address': query, 'key': key},
             timeout=5
         )
-        results = r.json().get('results', [])
+        _geo = r.json()
+        if _geo.get('status') not in ('OK', 'ZERO_RESULTS'):
+            print(f"  [Provider] Google Geocoding failed: HTTP {r.status_code}, "
+                  f"status={_geo.get('status') or 'none'}, message={_geo.get('error_message', '')[:200]}", flush=True)
+        results = _geo.get('results', [])
         if results:
             loc = results[0]['geometry']['location']
             return loc['lat'], loc['lng']
@@ -4727,7 +4786,11 @@ def nearby_competitors_google(lat, lng, niche, radius_m=1500, limit=8):
             },
             timeout=8
         )
-        results = r.json().get('results', [])
+        _nb = r.json()
+        if _nb.get('status') not in ('OK', 'ZERO_RESULTS'):
+            print(f"  [Provider] Google Nearby Search failed: HTTP {r.status_code}, "
+                  f"status={_nb.get('status') or 'none'}, message={_nb.get('error_message', '')[:200]}", flush=True)
+        results = _nb.get('results', [])
         cards = []
         price_map = {0: 'unknown', 1: '$', 2: '20', 3: '20$', 4: '2020'}
         for p in results[:limit]:
