@@ -1334,6 +1334,33 @@ def get_candidate_exposure_stats(
 _USAGE_TABLE_READY = False
 
 
+def get_usage_summary(day) -> dict | None:
+    """
+    Read one day's usage counters. Returns {"global": {kind: count},
+    "demo_ip_total": {kind: count}, "codes_total": {kind: count}}, or None if
+    the database is unavailable. Per-IP and per-code keys are summed, never
+    returned, so no visitor or code hash leaves the server.
+    """
+    try:
+        with get_db_session() as session:
+            rows = session.execute(text("""
+                SELECT scope, kind, SUM(count) AS total
+                FROM usage_counters
+                WHERE day = :day
+                GROUP BY scope, kind
+            """), {"day": day}).fetchall()
+        out = {"global": {}, "demo_ip_total": {}, "codes_total": {}}
+        bucket = {"global": "global", "demo_ip": "demo_ip_total", "code": "codes_total"}
+        for scope, kind, total in rows:
+            b = bucket.get(scope)
+            if b:
+                out[b][kind] = int(total or 0)
+        return out
+    except Exception as exc:
+        print(f"[DB] get_usage_summary error: {exc}", flush=True)
+        return None
+
+
 def increment_usage(day, scope: str, key: str, kind: str, amount: int = 1) -> int | None:
     """
     Atomically add `amount` to one daily usage counter and return the new total.
