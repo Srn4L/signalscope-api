@@ -1199,12 +1199,98 @@ def build_routing_reasons(website_pages, social_text, review_text, competitors, 
         reasons.append(f"Pricing detected: {', '.join(set(prices[:4]))}")
     return reasons
 
+def _social_state(text):
+    """Classify scraped social text: verified content, metadata only, or blocked."""
+    t = (text or "").strip()
+    if not t or "PRESENCE DETECTED - content blocked" in t:
+        return "blocked"
+    if t.startswith("[") and "METADATA]" in t[:40]:
+        return "metadata"
+    if t.startswith("[USER-PROVIDED"):
+        return "verified"
+    return "verified" if len(t) > 200 else "metadata"
+
+
+_CONF_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+
+def verify_fast_report(report, social_text, data_quality):
+    """
+    Backend check on the fast AI report, so the AI explains but does not
+    overstate. Removes platform scores for platforms with no verified content,
+    and caps confidence levels at what the data coverage supports. Only adds a
+    'verification' field; existing fields keep their shape.
+    """
+    if not isinstance(report, dict):
+        return report
+    try:
+        verified = {p.lower() for p, t in (social_text or {}).items() if _social_state(t) == "verified"}
+        linked   = {p.lower() for p in (social_text or {}).keys()}
+
+        removed = []
+        ps = report.get("platform_scores")
+        if isinstance(ps, dict):
+            kept = {}
+            for name, val in ps.items():
+                if str(name).lower() in verified:
+                    kept[name] = val
+                else:
+                    removed.append(name)
+            report["platform_scores"] = kept
+
+        smd = report.get("signal_map_data")
+        if isinstance(smd, dict) and isinstance(smd.get("platforms_present"), list):
+            smd["platforms_present"] = [p for p in smd["platforms_present"] if str(p).lower() in linked]
+
+        dq = data_quality or {}
+        pcts = [v.get("pct", 0) for v in dq.values() if isinstance(v, dict)]
+        avg = sum(pcts) / max(len(pcts), 1)
+        cap = "high" if avg >= 70 else "medium" if avg >= 40 else "low"
+
+        sc = str(report.get("signal_confidence") or "low").lower()
+        sc_level = "high" if "high" in sc else "medium" if "medium" in sc else "low"
+        if _CONF_ORDER[sc_level] > _CONF_ORDER[cap]:
+            report["signal_confidence"] = cap.capitalize()
+
+        scores = report.get("scores")
+        if isinstance(scores, dict):
+            for item in scores.values():
+                if isinstance(item, dict):
+                    c = str(item.get("confidence") or "low").lower()
+                    if _CONF_ORDER.get(c, 0) > _CONF_ORDER[cap]:
+                        item["confidence"] = cap
+
+        report["verification"] = {
+            "coverage_avg_pct": round(avg),
+            "confidence_cap": cap,
+            "social_verified": sorted(verified),
+            "social_unverified": sorted(linked - verified),
+            "platform_scores_removed": removed,
+        }
+    except Exception as e:
+        print(f"  [Verify] fast report check skipped: {e}", flush=True)
+    return report
+
+
 def build_data_quality(website_pages, social_text, review_text, competitors):
     web_pct = min(100, len(website_pages) * 25)
     web_level = "high" if web_pct >= 75 else "medium" if web_pct >= 40 else "low"
 
-    soc_pct = min(100, len(social_text) * 35)
+    # Score social on content actually read. A profile that only returned a
+    # "blocked" placeholder or bare metadata counts as linked, not verified.
+    soc_verified = [p for p, t in social_text.items() if _social_state(t) == "verified"]
+    soc_partial  = [p for p, t in social_text.items() if _social_state(t) == "metadata"]
+    soc_blocked  = [p for p, t in social_text.items() if _social_state(t) == "blocked"]
+    soc_pct = min(100, len(soc_verified) * 35 + len(soc_partial) * 10)
     soc_level = "high" if soc_pct >= 70 else "medium" if soc_pct >= 35 else "low"
+    _soc_parts = []
+    if soc_verified:
+        _soc_parts.append(", ".join(soc_verified))
+    if soc_partial:
+        _soc_parts.append(", ".join(soc_partial) + " (metadata only)")
+    if soc_blocked:
+        _soc_parts.append(", ".join(soc_blocked) + " (blocked)")
+    soc_detail = "; ".join(_soc_parts) or "none detected"
 
     rev_len = len(review_text)
     rev_pct = min(100, int(rev_len / 30))
@@ -1219,7 +1305,8 @@ def build_data_quality(website_pages, social_text, review_text, competitors):
 
     return {
         "website":     {"pct": web_pct,  "level": web_level,  "detail": f"{len(website_pages)} pages scraped"},
-        "social":      {"pct": soc_pct,  "level": soc_level,  "detail": f"{', '.join(social_text.keys()) or 'none detected'}"},
+        "social":      {"pct": soc_pct,  "level": soc_level,  "detail": soc_detail,
+                        "verified": soc_verified, "metadata_only": soc_partial, "blocked": soc_blocked},
         "reviews":     {"pct": rev_pct,  "level": rev_level,  "detail": f"{rev_len} chars"},
         "pricing":     {"pct": pr_pct,   "level": pr_level,   "detail": f"{len(prices)} price signals"},
         "competitors": {"pct": comp_pct, "level": comp_level, "detail": f"{len(competitors)} found"},
@@ -1248,7 +1335,11 @@ def run_fast_pipeline(business_name, location, website_pages, social_text, socia
     platform_hint = f"Social platforms detected: {_known}" if _known else "No social profiles provided"
     social_presence_note = ""
     if _blocked:
-        social_presence_note = f"\nNOTE: Content scraping blocked for {_blocked} - treat as ACTIVE but unverified. Do NOT say 'no social presence'. State they have {_known} presence with limited visible content."
+        social_presence_note = (
+            f"\nNOTE: Profiles linked for {_blocked}, but their content could not be read. "
+            f"Describe them as 'linked, content not verified'. Do NOT call them strong, weak, active or inactive, "
+            f"do NOT say 'no social presence', and do NOT score platforms you have no content for."
+        )
     if _with_content:
         social_presence_note += f"\nContent retrieved from: {_with_content}"
 
@@ -1283,6 +1374,8 @@ def run_fast_pipeline(business_name, location, website_pages, social_text, socia
     - If pricing data exists, compare it to market norms
     - If social platforms are missing, name which ones and why they matter for this niche
     - Set signal_confidence to "Low" if data was thin - be honest
+    - Only describe social presence from content in DATA. Linked-but-unread profiles are "not verified", never strong
+    - platform_scores: include ONLY platforms whose content appears in DATA
     - overall_score = outreach/opportunity score (0-100), NOT social content quality score
     - A business with 100+ reviews proving local demand should score 55+ even with thin social
     {{
@@ -2848,6 +2941,7 @@ def agent():
     # -- FAST RESPONSE - run GPT immediately, return to user -------------------
     try:
         fast_report = run_fast_pipeline(business_name, location, website_pages, social_text, social_links, gp_context=discovery_metadata)
+        fast_report = verify_fast_report(fast_report, social_text, build_data_quality(website_pages, social_text, "", []))
         fast_report["company"] = business_name
     except Exception as e:
         fast_report = {"company": business_name, "error": str(e), "overall_score": 0}
