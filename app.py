@@ -277,6 +277,47 @@ COST_LIMITS = {
 
 _KIND_LABEL = {"search": "searches", "analysis": "analyses", "batch_item": "batch analyses"}
 
+# Daily call caps per paid outside API, for ALL users combined (master code
+# included). Over the cap, the provider is skipped and the existing fallback
+# chain runs, exactly as if its key were missing. Set any LIMIT_API_* value
+# on Render to change it; 0 turns that provider off.
+API_CALL_LIMITS = {
+    "google_search":  _env_int("LIMIT_API_GOOGLE_SEARCH", 15),    # Places Text Search + Nearby Search
+    "google_details": _env_int("LIMIT_API_GOOGLE_DETAILS", 75),   # Places Details (website, phone)
+    "google_geocode": _env_int("LIMIT_API_GOOGLE_GEOCODE", 50),   # Geocoding
+    "serpapi":        _env_int("LIMIT_API_SERPAPI", 10),
+    "tavily":         _env_int("LIMIT_API_TAVILY", 30),
+    "scraperapi":     _env_int("LIMIT_API_SCRAPERAPI", 30),
+    "geoapify":       _env_int("LIMIT_API_GEOAPIFY", 500),
+}
+
+
+def api_budget_ok(provider: str, amount: int = 1) -> bool:
+    """
+    Reserve `amount` calls of a paid outside API for today (UTC). Returns False
+    when the daily cap would be exceeded (the reservation is undone), so the
+    caller can skip the provider. Allows the call if the counter is
+    unavailable, matching enforce_cost_limit.
+    """
+    limit = API_CALL_LIMITS.get(provider)
+    if limit is None or amount <= 0:
+        return True
+    if limit <= 0:
+        print(f"  [Budget] {provider} is turned off (limit 0)", flush=True)
+        return False
+    if not _DB_AVAILABLE:
+        return True
+    from datetime import datetime as _dt, timezone as _tz
+    day = _dt.now(_tz.utc).date()
+    total = increment_usage(day, "global", "all", "api_" + provider, amount)
+    if total is None:
+        return True
+    if total > limit:
+        increment_usage(day, "global", "all", "api_" + provider, -amount)
+        print(f"  [Budget] {provider} daily cap reached ({limit}); skipping provider", flush=True)
+        return False
+    return True
+
 
 def client_ip(req) -> str:
     """
@@ -457,7 +498,7 @@ def safe_get(url, timeout=10):
         print(f"[Fetch] direct blocked — trying ScraperAPI: {url}", flush=True)
 
     # -- ScraperAPI fallback (Cloudflare/JS-rendered/geo-blocked pages) -------
-    if SCRAPER_API_KEY:
+    if SCRAPER_API_KEY and api_budget_ok("scraperapi"):
         try:
             proxy_url = (
                 f"http://api.scraperapi.com"
@@ -652,7 +693,7 @@ def search_web(query, max_results=6):
     For review context, press, market mentions — use search_context() instead.
     '''
     # -- SerpAPI (Google) — primary for discovery/operators -------------------
-    if SERP_API_KEY:
+    if SERP_API_KEY and api_budget_ok("serpapi"):
         try:
             import requests as _req
             r = _req.get(
@@ -712,7 +753,7 @@ def search_context(query, max_results=6):
     so use search_web() for those instead.
     '''
     # -- Tavily (AI-optimized — primary for context queries) ------------------
-    if TAVILY_API_KEY:
+    if TAVILY_API_KEY and api_budget_ok("tavily"):
         try:
             r = req.post(
                 "https://api.tavily.com/search",
@@ -4783,6 +4824,8 @@ def search_google_places(niche, location, limit=10):
     if not key:
         print("  [Provider] Google Places skipped: GOOGLE_PLACES_API_KEY is not set", flush=True)
         return []
+    if not api_budget_ok("google_search"):
+        return []
     try:
         r = req.get(
             "https://maps.googleapis.com/maps/api/place/textsearch/json",
@@ -4802,7 +4845,7 @@ def search_google_places(niche, location, limit=10):
             if not name or len(name) < 3:
                 continue
             website = ""
-            if place_id and len(results) < 5:
+            if place_id and len(results) < 5 and api_budget_ok("google_details"):
                 try:
                     det = req.get(
                         "https://maps.googleapis.com/maps/api/place/details/json",
@@ -4872,6 +4915,8 @@ def search_geoapify(niche, location, limit=10):
     category = geoapify_category_for(niche)
     if not category:
         print(f"  [Provider] Geoapify skipped: no category mapping for niche {niche!r}", flush=True)
+        return []
+    if not api_budget_ok("geoapify", 2):
         return []
     try:
         geo_r = req.get(
@@ -4963,6 +5008,8 @@ def geocode_business(business_name, address=None, location=None):
     key = os.environ.get('GOOGLE_PLACES_API_KEY', '')
     if not key:
         return None, None
+    if not api_budget_ok("google_geocode"):
+        return None, None
     try:
         import requests as req
         query = address or f'{business_name} {location or ""}'
@@ -4992,6 +5039,8 @@ def nearby_competitors_google(lat, lng, niche, radius_m=1500, limit=8):
     '''
     key = os.environ.get('GOOGLE_PLACES_API_KEY', '')
     if not key or not lat or not lng:
+        return []
+    if not api_budget_ok("google_search"):
         return []
     try:
         import requests as req
@@ -5023,7 +5072,7 @@ def nearby_competitors_google(lat, lng, niche, radius_m=1500, limit=8):
 
             # Get website via Details call (only for top 4)
             website = ''
-            if place_id and len(cards) < 4:
+            if place_id and len(cards) < 4 and api_budget_ok("google_details"):
                 try:
                     det = req.get(
                         'https://maps.googleapis.com/maps/api/place/details/json',
