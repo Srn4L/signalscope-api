@@ -1351,6 +1351,212 @@ h1 em{color:var(--accent);font-style:normal;position:relative;}
 .opp-intel-zone.visible{display:block;}
 .refresh-signals-btn{font-family:var(--font-head);font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;background:transparent;color:var(--muted);border:1px solid var(--border2);border-radius:5px;padding:5px 11px;cursor:pointer;transition:all .15s;}
 .refresh-signals-btn:hover{border-color:var(--blue);color:var(--blue);}
+
+/* ── PHASE 1 LAYOUT: navigation, Discover, Research, Workspace ───────── */
+.wrap{max-width:1200px;}
+.header{padding:16px 0;}
+.header-badge{display:none;}
+.logo{cursor:pointer;text-decoration:none;}
+.yh-nav{display:flex;gap:4px;margin-left:22px;}
+.yh-nav a{font:600 14.5px var(--font-head);color:#E5D6C3;padding:8px 14px;border-radius:999px;text-decoration:none;}
+.yh-nav a:hover{color:#FBF6EC;}
+.yh-nav a.on{background:#F6C624;color:#2B1A12;}
+.header-right{display:flex;align-items:center;gap:10px;}
+.yh-code-btn{height:38px;padding:0 16px;border-radius:19px;border:1.5px solid #6B4A36;background:transparent;color:#FBF6EC;font:600 13.5px var(--font-head);cursor:pointer;white-space:nowrap;}
+.yh-code-btn:hover{border-color:#F6C624;}
+.yh-code-btn.on{border-color:#3D6B52;background:#23382B;color:#B7E0C3;}
+
+/* view switching */
+#discoverView,#researchView{display:none;}
+body[data-view="discover"] #discoverView{display:block;}
+body[data-view="research"] #researchView{display:block;}
+body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceView{display:none;}
+
+/* shared pieces */
+.yh-band{position:relative;background:var(--band);box-shadow:0 0 0 100vmax var(--band);clip-path:inset(0 -100vmax);
+  --text:var(--band-text);--muted:var(--band-muted);--heading:var(--band-text);--accent:var(--band-accent);}
+.yh-card{background:var(--card);border:1px solid var(--border);border-radius:18px;}
+.yh-h2{font-family:var(--font-display);font-size:24px;font-weight:600;letter-spacing:-.015em;color:var(--heading);margin:0;}
+.yh-eyebrow{font:700 12px var(--font-head);letter-spacing:.08em;text-transform:uppercase;color:var(--accent);}
+.yh-link{font:600 14px var(--font-head);color:var(--accent);text-decoration:underline;text-underline-offset:3px;background:none;border:none;cursor:pointer;padding:0;}
+.yh-pill{height:40px;padding:0 18px;border-radius:20px;border:1.5px solid var(--border2);background:transparent;color:var(--text);font:600 14px var(--font-head);cursor:pointer;}
+.yh-pill:hover{border-color:var(--text);}
+.yh-btn-dark{height:46px;padding:0 22px;border-radius:23px;border:none;background:#2B1A12;color:#FBF6EC;font:600 15px var(--font-head);cursor:pointer;display:inline-flex;align-items:center;text-decoration:none;}
+.yh-btn-gold{height:46px;padding:0 22px;border-radius:23px;border:none;background:var(--accent-fill);color:var(--on-accent);font:700 15px var(--font-head);cursor:pointer;}
+.lab{display:inline-flex;align-items:center;gap:5px;font:700 12px var(--font-head);padding:3px 9px;border-radius:999px;white-space:nowrap;width:max-content;max-width:100%;align-self:flex-start;}
+.lab-v{color:#2F5E45;background:#E3EEE4;}
+.lab-e{color:#8A5A00;background:#F8E7B0;}
+.lab-r{color:#3D4F6E;background:#E4E8EF;}
+.lab-u{color:#6B5A4E;background:#EFE6D6;}
+.lab-s{color:var(--purple);border:1.5px dashed currentColor;background:transparent;}
+:root:not([data-theme="light"]) .lab-v{color:#B7E0C3;background:#23382B;}
+:root:not([data-theme="light"]) .lab-e{color:#F2C53D;background:#3D2E10;}
+:root:not([data-theme="light"]) .lab-r{color:#C9D4E8;background:#2A3140;}
+:root:not([data-theme="light"]) .lab-u{color:#C9B8A6;background:#34231A;}
+.num{font-variant-numeric:tabular-nums;}
+
+/* ── DISCOVER ── */
+.dc-band{padding:44px 0 150px;}
+.dc-title{font-family:var(--font-display);font-size:clamp(36px,5vw,58px);font-weight:600;letter-spacing:-.035em;line-height:1.02;color:var(--heading);margin:8px 0 0;}
+.dc-dek{font-size:16px;line-height:1.6;color:var(--text);max-width:640px;margin-top:14px;}
+.dc-search{display:flex;align-items:center;gap:10px;margin-top:22px;max-width:640px;height:54px;padding:0 6px 0 18px;border-radius:27px;background:#FFFDF8;border:1px solid rgba(43,26,18,.15);}
+.dc-search input{flex:1;min-width:0;border:none;outline:none;background:transparent;color:#2B1A12;font:16px var(--font-head);}
+.dc-search input::placeholder{color:#7A6A5E;}
+.dc-search button{height:42px;padding:0 20px;border-radius:21px;border:none;background:#2B1A12;color:#FBF6EC;font:600 15px var(--font-head);cursor:pointer;}
+.dc-grid{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:32px;margin-top:-110px;position:relative;align-items:start;}
+.dc-main,.dc-aside{display:flex;flex-direction:column;gap:36px;min-width:0;}
+.dc-aside{gap:22px;}
+.dc-feature{display:grid;grid-template-columns:minmax(0,1fr) 290px;border-radius:26px;overflow:hidden;background:#2B1A12;color:#FBF6EC;text-decoration:none;cursor:pointer;box-shadow:0 18px 40px rgba(43,26,18,.18);}
+:root:not([data-theme="light"]) .dc-feature{box-shadow:0 0 0 1px rgba(242,197,61,.35);}
+.dc-feature-body{padding:38px;display:flex;flex-direction:column;gap:14px;justify-content:center;}
+.dc-feature-hl{font-family:var(--font-display);font-size:clamp(26px,3vw,38px);font-weight:600;line-height:1.12;letter-spacing:-.02em;color:#FBF6EC;}
+.dc-feature-dek{font-size:16px;line-height:1.6;color:#D9CBB8;}
+.dc-feature-meta{font-size:13.5px;color:#C9B8A6;}
+.dc-feature-score{background:#3A281D;padding:32px 28px;display:flex;flex-direction:column;justify-content:center;gap:20px;}
+.dc-ball{width:92px;height:92px;border-radius:50%;background:#F6C624;color:#2B1A12;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-size:40px;font-weight:700;flex:0 0 auto;}
+.dc-meters{display:flex;flex-direction:column;gap:12px;}
+.dc-meter{display:grid;grid-template-columns:88px minmax(0,1fr) 26px;gap:10px;align-items:center;font-size:13.5px;color:#D9CBB8;}
+.dc-meter i{height:6px;border-radius:3px;background:#4A3527;display:block;overflow:hidden;}
+.dc-meter i b{display:block;height:100%;border-radius:3px;}
+.dc-meter span:last-child{color:#FBF6EC;text-align:right;}
+.dc-h2row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;}
+.dc-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;}
+.dc-card{padding:22px;display:flex;flex-direction:column;gap:10px;text-decoration:none;color:var(--text);cursor:pointer;}
+.dc-card:hover,.dc-step:hover{border-color:var(--border2);}
+.dc-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;}
+.dc-step{padding:22px;display:flex;flex-direction:column;gap:8px;cursor:pointer;text-align:left;font:inherit;color:var(--text);}
+.dc-step-n{font-family:var(--font-display);font-size:28px;font-weight:700;color:var(--accent);line-height:1;}
+.dc-step-t{font-size:17px;font-weight:700;color:var(--heading);}
+.dc-step-d{font-size:14px;line-height:1.55;color:var(--muted);}
+.dc-rank{padding:22px 24px 8px;}
+.dc-rank-row{display:grid;grid-template-columns:28px minmax(0,1fr) 44px;gap:12px;align-items:center;padding:13px 0;border-top:1px solid var(--border);text-decoration:none;color:var(--text);cursor:pointer;}
+.dc-cta{padding:28px;border-radius:24px;background:var(--accent-fill);color:#2B1A12;display:flex;flex-direction:column;gap:12px;}
+.dc-cta h2{font-family:var(--font-display);font-size:26px;font-weight:600;letter-spacing:-.02em;line-height:1.12;color:#2B1A12;margin:0;}
+.dc-cta p{font-size:15px;line-height:1.5;color:#3A281D;margin:0;}
+.dc-legend{padding:4px;display:flex;flex-direction:column;gap:10px;}
+.dc-legend-row{display:flex;gap:10px;align-items:center;font-size:14px;color:var(--muted);}
+
+/* ── RESEARCH ── */
+.rs-band{padding:34px 0 40px;}
+.rs-hero{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:48px;align-items:center;}
+.rs-hl{display:flex;flex-direction:column;gap:12px;}
+.rs-back{font:600 14px var(--font-head);color:var(--heading);text-decoration:none;}
+.rs-eyebrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+.rs-title{font-family:var(--font-display);font-size:clamp(38px,5vw,62px);font-weight:600;line-height:1;letter-spacing:-.035em;color:var(--heading);margin:0;}
+.rs-dek{font-size:clamp(16px,1.6vw,19px);line-height:1.55;color:var(--text);max-width:640px;margin:0;}
+.rs-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px;font-size:14px;color:var(--muted);}
+.rs-meta .yh-pill{border-color:rgba(43,26,18,.55);color:var(--heading);height:40px;}
+:root:not([data-theme="light"]) .rs-meta .yh-pill{border-color:#5A4232;}
+.rs-score{border-radius:26px;background:#2B1A12;color:#FBF6EC;padding:28px;}
+:root:not([data-theme="light"]) .rs-score{box-shadow:0 0 0 1px rgba(242,197,61,.45);}
+.rs-ring{position:relative;width:124px;height:124px;flex:0 0 auto;}
+.rs-ring span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-size:46px;font-weight:700;}
+.rs-tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:20px;}
+.rs-tile{padding:14px;border-radius:14px;background:#3A281D;display:flex;flex-direction:column;gap:6px;}
+.rs-tile b{font-size:26px;font-weight:700;}
+.rs-tile i{display:block;height:4px;border-radius:2px;background:#4A3527;overflow:hidden;}
+.rs-tile i em{display:block;height:100%;}
+.rs-tile small{font-size:12.5px;color:#D9CBB8;}
+.rs-body{display:grid;grid-template-columns:190px minmax(0,1fr) 300px;gap:40px;padding-top:40px;}
+.rs-toc{position:sticky;top:20px;align-self:start;display:flex;flex-direction:column;}
+.rs-toc span{font:600 12px var(--font-head);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-bottom:10px;}
+.rs-toc button{text-align:left;background:none;border:none;border-left:2px solid var(--border);padding:9px 14px;font:600 14.5px var(--font-head);color:var(--muted);cursor:pointer;}
+.rs-toc button:hover{color:var(--text);border-left-color:var(--accent-fill);}
+.rs-main{display:flex;flex-direction:column;gap:40px;min-width:0;}
+.rs-sec{display:flex;flex-direction:column;gap:14px;scroll-margin-top:20px;}
+.rs-quote{font-family:var(--font-display);font-size:22px;font-weight:500;line-height:1.5;color:var(--heading);padding-left:20px;border-left:4px solid var(--accent-fill);margin:0;}
+.rs-table{padding:4px 24px;}
+.rs-row{display:grid;grid-template-columns:minmax(0,1fr) 110px 110px 150px;gap:12px;padding:14px 0;border-top:1px solid var(--border);font-size:15px;align-items:center;}
+.rs-row:first-child{border-top:none;}
+.rs-row.th{font:600 12px var(--font-head);color:var(--muted);letter-spacing:.05em;text-transform:uppercase;padding:12px 0;}
+.rs-row > :nth-child(n+2){text-align:right;}
+.rs-row .v{font-weight:700;font-size:16.5px;color:var(--heading);}
+.rs-row .c{color:var(--muted);}
+.rs-mlab{display:none;}
+.rs-find{padding:18px 22px;display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:14px;align-items:start;border-top:1px solid var(--border);}
+.rs-find:first-child{border-top:none;}
+.rs-find-n{font-family:var(--font-display);font-size:20px;font-weight:700;color:var(--accent);}
+.rs-plays{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;}
+.rs-play{padding:22px;display:flex;flex-direction:column;gap:10px;}
+.rs-play-t{font-family:var(--font-display);font-size:21px;font-weight:600;line-height:1.2;color:var(--heading);}
+.rs-play-s{display:flex;gap:18px;font-size:13.5px;color:var(--muted);}
+.rs-play-s b{font-size:18px;color:var(--heading);}
+.rs-aside{display:flex;flex-direction:column;gap:20px;align-self:start;}
+.rs-chips{display:flex;flex-wrap:wrap;gap:8px;}
+.rs-chip{padding:7px 12px;border-radius:999px;background:var(--card2);font-size:13.5px;}
+.rs-chip.warn{background:#F7E1D8;color:#8C2F1A;}
+:root:not([data-theme="light"]) .rs-chip.warn{background:#3D2620;color:#F5C2AE;}
+.rs-src{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-top:1px solid var(--border);font-size:14px;}
+.rs-src:first-of-type{border-top:none;}
+
+/* ── WORKSPACE ── */
+#workspaceView .hero{padding:30px 0 28px;}
+#workspaceView .hero > .hero-tag,#workspaceView .hero > h1,#workspaceView .hero > .hero-sub,#workspaceView .hero > .hero-desc,#workspaceView .hero > .workflow-strip{display:none;}
+.ws-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;}
+.ws-title{font-family:var(--font-display);font-size:clamp(32px,4vw,44px);font-weight:600;letter-spacing:-.03em;color:var(--heading);margin:0;}
+#workspaceView .tabs{margin:0;border:none;background:#2B1A12;border-radius:999px;padding:4px;gap:4px;}
+#workspaceView .tab{border:none;border-radius:999px;padding:10px 20px;font:600 14.5px var(--font-head);letter-spacing:0;text-transform:none;color:#E5D6C3;}
+#workspaceView .tab.active{background:#FFFDF8;color:#2B1A12;}
+#workspaceView .tab:hover:not(.active){color:#FBF6EC;}
+:root:not([data-theme="light"]) #workspaceView .tabs{background:#1E130D;box-shadow:inset 0 0 0 1px #4A3527;}
+:root:not([data-theme="light"]) #workspaceView .tab.active{background:#F6C624;}
+.ws-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:36px;align-items:start;}
+.ws-main{min-width:0;}
+.ws-aside{padding-top:36px;display:flex;flex-direction:column;gap:16px;position:sticky;top:16px;}
+.ws-box{padding:20px 22px;display:flex;flex-direction:column;gap:10px;}
+.ws-box h3{font-family:var(--font-display);font-size:20px;font-weight:600;color:var(--heading);margin:0;}
+.ws-box p{font-size:14px;line-height:1.55;color:var(--muted);margin:0;}
+.ws-stat{display:flex;align-items:baseline;gap:8px;}
+.ws-stat b{font-family:var(--font-display);font-size:32px;font-weight:700;color:var(--heading);}
+.ws-note{padding:18px 20px;border-radius:18px;background:var(--card2);font-size:14px;line-height:1.55;color:var(--text);}
+
+/* ── MOBILE ── */
+.yh-bottom{display:none;}
+@media (max-width:1100px){
+  .rs-body{grid-template-columns:minmax(0,1fr) 280px;}
+  .rs-toc{display:none;}
+}
+@media (max-width:1000px){
+  .dc-grid,.rs-hero,.rs-body,.ws-grid{grid-template-columns:minmax(0,1fr);}
+  .ws-aside{display:none;}
+  .rs-hero{gap:24px;}
+}
+@media (max-width:760px){
+  .yh-nav{display:none;}
+  .yh-code-btn{height:34px;padding:0 12px;font-size:13px;}
+  .yh-bottom{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:60;height:64px;padding-bottom:env(safe-area-inset-bottom);background:var(--card);border-top:1px solid var(--border);justify-content:space-around;align-items:center;}
+  .yh-bottom a{display:flex;flex-direction:column;align-items:center;gap:3px;font:600 11.5px var(--font-head);color:var(--muted);text-decoration:none;min-width:64px;padding-top:6px;}
+  .yh-bottom a svg{width:22px;height:22px;}
+  .yh-bottom a.on{color:var(--heading);}
+  .yh-bottom a::after{content:'';width:18px;height:3px;border-radius:2px;background:transparent;}
+  .yh-bottom a.on::after{background:#F6C624;}
+  body{padding-bottom:72px;}
+  .wrap{padding-left:16px;padding-right:16px;}
+  .dc-band{padding:28px 0 120px;}
+  .dc-search{height:50px;}
+  .dc-search button{display:none;}
+  .dc-grid{margin-top:-96px;gap:28px;}
+  .dc-feature{grid-template-columns:minmax(0,1fr);border-radius:22px;}
+  .dc-feature-body{padding:22px;}
+  .dc-feature-score{flex-direction:row;align-items:center;padding:18px 22px;gap:16px;}
+  .dc-feature-score .dc-meters{display:none;}
+  .dc-ball{width:64px;height:64px;font-size:28px;}
+  .dc-cards,.dc-steps,.rs-plays{grid-template-columns:minmax(0,1fr);}
+  .rs-band{padding:20px 0 26px;}
+  .rs-score{padding:20px;}
+  .rs-ring{width:100px;height:100px;}
+  .rs-ring svg{width:100px;height:100px;}
+  .rs-ring span{font-size:38px;}
+  .rs-table{padding:4px 16px;}
+  .rs-row{grid-template-columns:minmax(0,1fr) 76px 76px;}
+  .rs-row > :nth-child(4){display:none;}
+  .rs-mlab{display:inline-flex;}
+  .rs-find{padding:16px;grid-template-columns:26px minmax(0,1fr);}
+  .rs-find .lab{grid-column:2;justify-self:start;}
+  .ws-head{flex-direction:column;align-items:flex-start;}
+  #workspaceView .tabs{width:100%;}
+  #workspaceView .tab{flex:1;padding:10px 8px;text-align:center;}
+}
 </style>
 </head>
 <body>
@@ -1402,18 +1608,76 @@ h1 em{color:var(--accent);font-style:normal;position:relative;}
 <!-- HEADER -->
 <div class="header">
   <div class="header-left">
-    <div class="logo">
+    <a class="logo" href="#/" aria-label="Yelhao home">
       <div class="logo-mark">y</div>
       <div class="logo-text"><span>y</span>elha<span>o</span></div>
-    </div>
+    </a>
     <div class="header-badge">Business Discovery &amp; Intelligence</div>
+    <nav class="yh-nav" aria-label="Main">
+      <a href="#/" data-nav="discover">Discover</a>
+      <a href="#/scout" data-nav="scout">Scout</a>
+      <a href="#/analyze" data-nav="analyze">Analyze</a>
+      <a href="#/networks" data-nav="networks">Networks</a>
+    </nav>
   </div>
+  <div class="header-right">
+  <button class="yh-code-btn" id="yhCodeBtn" onclick="yhCodeClick()">Enter code</button>
   <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">
     <span class="theme-icon active" id="darkIcon">🌙</span>
     <span class="theme-icon" id="lightIcon">☀️</span>
   </button>
+  </div>
 </div>
 
+<!-- DISCOVER -->
+<div id="discoverView">
+  <section class="yh-band dc-band">
+    <p class="yh-eyebrow" id="dcDate"></p>
+    <h1 class="dc-title">Discover local opportunities</h1>
+    <p class="dc-dek">Yelhao reads public signals like reviews, websites, socials and booking pages, then ranks local businesses by opportunity and explains every score.</p>
+    <form class="dc-search" onsubmit="yhSearch(event)" role="search">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6B5A4E" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>
+      <input id="dcSearch" type="search" placeholder="Try: nail salons in Astoria with weak marketing" aria-label="Describe the businesses you are looking for"/>
+      <button type="submit">Scout</button>
+    </form>
+  </section>
+  <div class="dc-grid">
+    <div class="dc-main">
+      <div id="dcFeatured"></div>
+      <section id="dcFreshSec" hidden><div class="dc-h2row"><h2 class="yh-h2">Fresh discoveries</h2></div><div class="dc-cards" id="dcFresh"></div></section>
+      <section>
+        <div class="dc-h2row"><h2 class="yh-h2">How Yelhao works</h2></div>
+        <div class="dc-steps">
+          <a class="yh-card dc-step" href="#/scout" style="text-decoration:none"><span class="dc-step-n">1</span><span class="dc-step-t">Scout</span><span class="dc-step-d">Describe the businesses you want. Yelhao finds them and ranks them by Demand, Gap and Conversion.</span></a>
+          <a class="yh-card dc-step" href="#/analyze" style="text-decoration:none"><span class="dc-step-n">2</span><span class="dc-step-t">Analyze</span><span class="dc-step-d">Get an evidence-based report on one business, with every claim labeled.</span></a>
+          <a class="yh-card dc-step" href="#/networks" style="text-decoration:none"><span class="dc-step-n">3</span><span class="dc-step-t">Networks</span><span class="dc-step-d">Save the ones worth acting on, then export or sync them to your CRM.</span></a>
+        </div>
+      </section>
+    </div>
+    <aside class="dc-aside">
+      <section id="dcRankSec" class="yh-card dc-rank" hidden><div class="dc-h2row" style="margin-bottom:6px"><h2 class="yh-h2" style="font-size:21px">Top researched</h2></div><div id="dcRank"></div></section>
+      <section class="dc-cta">
+        <h2>Research a business near you</h2>
+        <p>Try a live search, no sign-up needed.</p>
+        <a class="yh-btn-dark" href="#/scout" style="align-self:flex-start">Open Scout</a>
+      </section>
+      <section class="dc-legend">
+        <span style="font-size:14px;font-weight:700;color:var(--heading)">How to read a report</span>
+        <div class="dc-legend-row"><span class="lab lab-v">✓ Verified</span>Seen in a public source</div>
+        <div class="dc-legend-row"><span class="lab lab-e">≈ Estimate</span>Modeled, not observed</div>
+        <div class="dc-legend-row"><span class="lab lab-r">→ Recommendation</span>Our suggestion</div>
+        <div class="dc-legend-row"><span class="lab lab-u">? Unknown</span>Not found, not negative</div>
+        <div class="dc-legend-row"><span class="lab lab-s">Sample</span>Example report</div>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<!-- RESEARCH PAGE (rendered by router) -->
+<div id="researchView"></div>
+
+<!-- WORKSPACE -->
+<div id="workspaceView">
 <!-- HERO -->
 <div class="hero">
   <div class="hero-tag"><div class="hero-dot"></div>Signal Intelligence · Business Discovery</div>
@@ -1431,12 +1695,16 @@ h1 em{color:var(--accent);font-style:normal;position:relative;}
     <div class="wf-step"><div class="wf-node wf-export"><span class="wf-icon">🔗</span><div><div class="wf-label">Sync or Export</div><div class="wf-sub">CRM · Airtable · CSV</div></div></div></div>
   </div>
 
+  <div class="ws-head">
+  <h1 class="ws-title">Workspace</h1>
   <div class="tabs">
     <button class="tab active" onclick="switchTab('scout',this)">🔍 Scout</button>
     <button class="tab" onclick="switchTab('analyze',this)">⚡ Analyze</button>
     <button class="tab" onclick="switchTab('networks',this)">📁 Networks <span class="tab-badge" id="networksCount"></span></button>
   </div>
+  </div>
 </div>
+<div class="ws-grid"><div class="ws-main">
 
 <!-- ANALYZE PANEL -->
 <div id="analyzePanel" style="display:none;">
@@ -2001,7 +2269,33 @@ h1 em{color:var(--accent);font-style:normal;position:relative;}
   </div>
   <div id="networksSummaryStrip" style="display:none;"></div>
 </div>
+</div><!-- /ws-main -->
+<aside class="ws-aside">
+  <section class="yh-card ws-box">
+    <h3>Networks</h3>
+    <div class="ws-stat"><b class="num" id="wsSavedCount">0</b><span style="color:var(--muted)">saved this session</span></div>
+    <a class="yh-link" href="#/networks">Open Networks</a>
+  </section>
+  <section class="yh-card ws-box">
+    <h3>Access</h3>
+    <p id="wsAccessState">You are in demo mode. Enter an access code to unlock live analysis.</p>
+  </section>
+  <section class="yh-card ws-box">
+    <h3>Daily limits</h3>
+    <p>Searches and deep analyses have a daily limit per visitor. Limits reset every day and keep Yelhao free to run.</p>
+  </section>
+  <div class="ws-note"><b>Also in Workspace:</b> CRM sync, Airtable and CSV export live under Networks.</div>
+</aside>
+</div><!-- /ws-grid -->
+</div><!-- /workspaceView -->
 </div><!-- /wrap -->
+
+<nav class="yh-bottom" aria-label="Main">
+  <a href="#/" data-nav="discover"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"></path></svg>Discover</a>
+  <a href="#/scout" data-nav="scout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>Scout</a>
+  <a href="#/analyze" data-nav="analyze"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"></path></svg>Analyze</a>
+  <a href="#/networks" data-nav="networks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 4h12v16l-6-4-6 4z"></path></svg>Networks</a>
+</nav>
 
 
 <!-- CONNECTOR MODAL -->
@@ -5594,4 +5888,290 @@ function cleanProblemText(raw) {
   return raw.slice(0, 160);
 }
 
+</script>
+<script>
+// ═══════════════════════════════════════════════════════════════════
+// PHASE 1 LAYOUT: router (Discover, Research, Workspace), Discover feed,
+// Research page. Wraps existing switchTab/updateAccessUI without changing them.
+// ═══════════════════════════════════════════════════════════════════
+(function () {
+  const WS_TABS = ['scout', 'analyze', 'networks'];
+  let yhReady = false;
+
+  // Curated research library. Only real, labeled content goes here.
+  // Each entry points at a report object; editorial text is written by hand.
+  const YH_LIBRARY = [{
+    slug: 'glow-wellness-nyc',
+    sample: true,
+    report: (typeof DEMO_REPORT !== 'undefined') ? DEMO_REPORT : null,
+    name: 'Glow Wellness NYC',
+    category: 'Skincare spa',
+    area: 'Brooklyn',
+    headline: "Great reviews, zero video: a Brooklyn spa's missed moment",
+    card_line: 'Great reviews, zero video content',
+    dek: 'Glow Wellness NYC has 4.6 stars across 183 Yelp reviews and charges less than nearby competitors, but has no short-form video in a category where people discover new spots on Reels and TikTok.',
+    short: "Customers already describe their results in reviews. The spa just isn't showing them. A short before-and-after video series is the clearest opening.",
+    rows: [
+      { m: 'Rating', v: '4.6', c: '4.2', lab: 'v' },
+      { m: 'Reviews', v: '183', c: '', lab: 'v' },
+      { m: 'Facial price', v: '$65–95', c: '$80–140', lab: 'v' },
+      { m: 'Video posts', v: '0', c: '', lab: 'v', bad: true },
+      { m: 'YouTube, LinkedIn', v: 'Not found', c: '', lab: 'u' },
+      { m: 'Avg transaction', v: '$78', c: '', lab: 'e' },
+      { m: 'Revenue / yr', v: '$420K', c: '', lab: 'e' },
+    ],
+    findings: [
+      { t: 'No video content found. Instagram is almost entirely static photography and TikTok is minimal.', lab: 'v', src: 'Instagram, TikTok' },
+      { t: 'Reviews repeatedly mention a relaxing atmosphere, knowledgeable staff and noticeable results.', lab: 'v', src: 'Yelp, 183 reviews' },
+      { t: 'Booking availability is the most cited pain point, which points to demand rather than a quality problem.', lab: 'v', src: 'Yelp' },
+      { t: 'Roughly 450 customers a month at an average of $78 per visit.', lab: 'e', src: 'Modeled' },
+    ],
+    sources: [
+      ['Yelp', '183 reviews'], ['Website', '4 pages'], ['Instagram', 'Partial'],
+      ['Competitors', '5 compared'], ['TikTok', 'Minimal'], ['YouTube, LinkedIn', 'Not detected'],
+    ],
+  }];
+
+  const LABELS = {
+    v: ['lab-v', '✓ Verified'], e: ['lab-e', '≈ Estimate'], r: ['lab-r', '→ Recommendation'],
+    u: ['lab-u', '? Unknown'], s: ['lab-s', 'Sample'],
+  };
+  const lab = (k, extra) => `<span class="lab ${LABELS[k][0]}${extra ? ' ' + extra : ''}">${LABELS[k][1]}</span>`;
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  const sig = item => (item.report && item.report.signal_scores) || {};
+  const score = item => (item.report && item.report.overall_score) || '';
+  const srcCount = item => item.sources.filter(x => !/not detected/i.test(x[1])).length;
+
+  // ── navigation state ──
+  function setNav(key) {
+    document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === key));
+  }
+  function syncHeaderCode() {
+    const b = document.getElementById('yhCodeBtn');
+    if (!b) return;
+    const on = (typeof isUnlocked === 'function') && isUnlocked();
+    b.textContent = on ? 'Code active' : 'Enter code';
+    b.classList.toggle('on', !!on);
+    const s = document.getElementById('wsAccessState');
+    if (s) s.textContent = on ? 'Your access code is active. Live Scout and Analyze runs are unlocked within daily limits.' : 'You are in demo mode. Enter an access code to unlock live analysis.';
+  }
+  function syncAside() {
+    const n = (typeof networksState !== 'undefined' && Array.isArray(networksState)) ? networksState.length : 0;
+    const el = document.getElementById('wsSavedCount');
+    if (el) el.textContent = n;
+  }
+
+  // ── views ──
+  function showDiscover() {
+    document.body.dataset.view = 'discover';
+    setNav('discover');
+    renderDiscover();
+  }
+  function showResearch(slug) {
+    const item = YH_LIBRARY.find(x => x.slug === slug);
+    if (!item) { location.replace('#/'); return; }
+    document.body.dataset.view = 'research';
+    setNav('discover');
+    renderResearch(item);
+    document.title = item.name + ' | Yelhao research';
+  }
+  function showWorkspace(tab) {
+    document.body.dataset.view = 'workspace';
+    const btn = document.querySelector(".tab[onclick*=\"'" + tab + "'\"]");
+    _origSwitch(tab, btn);
+    setNav(tab);
+    syncAside();
+  }
+  function route() {
+    const h = location.hash.replace(/^#\/?/, '');
+    if (!h.startsWith('r/')) document.title = 'Yelhao | Local business research';
+    if (h.startsWith('r/')) showResearch(h.slice(2));
+    else if (WS_TABS.includes(h)) showWorkspace(h);
+    else showDiscover();
+  }
+
+  // ── wrap existing functions ──
+  const _origSwitch = window.switchTab;
+  window.switchTab = function (tab, el) {
+    _origSwitch(tab, el);
+    if (!yhReady) return;
+    document.body.dataset.view = 'workspace';
+    if (location.hash !== '#/' + tab) history.replaceState(null, '', '#/' + tab);
+    setNav(tab);
+    syncAside();
+  };
+  if (typeof window.updateAccessUI === 'function') {
+    const _origAccess = window.updateAccessUI;
+    window.updateAccessUI = function () { _origAccess.apply(this, arguments); syncHeaderCode(); };
+  }
+  if (typeof window.updateNetworksBadge === 'function') {
+    const _origBadge = window.updateNetworksBadge;
+    window.updateNetworksBadge = function () { _origBadge.apply(this, arguments); syncAside(); };
+  }
+
+  window.yhCodeClick = function () {
+    if (typeof isUnlocked === 'function' && isUnlocked()) { location.hash = '#/scout'; return; }
+    if (typeof openModal === 'function') openModal();
+  };
+  window.yhSearch = function (e) {
+    e.preventDefault();
+    const q = (document.getElementById('dcSearch').value || '').trim();
+    location.hash = '#/scout';
+    setTimeout(() => {
+      const g = document.getElementById('scoutGoal');
+      if (!g) return;
+      if (q) { g.value = q; g.dispatchEvent(new Event('input', { bubbles: true })); }
+      g.focus();
+      g.scrollIntoView({ block: 'center' });
+    }, 30);
+  };
+  window.yhOpenDemo = function () {
+    location.hash = '#/analyze';
+    setTimeout(() => { if (typeof runDemo === 'function') runDemo(); }, 60);
+  };
+  window.yhShare = function (btn) {
+    const url = location.href;
+    const done = () => { if (btn) { const t = btn.textContent; btn.textContent = 'Link copied'; setTimeout(() => { btn.textContent = t; }, 1800); } };
+    if (navigator.share) { navigator.share({ title: document.title, url }).catch(() => {}); return; }
+    if (navigator.clipboard) navigator.clipboard.writeText(url).then(done).catch(() => {});
+  };
+  window.yhJump = function (id) {
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  // ── Discover ──
+  function meters(item) {
+    const s = sig(item);
+    const row = (name, val, color) => val == null ? '' :
+      `<div class="dc-meter num"><span>${name}</span><i><b style="width:${val}%;background:${color}"></b></i><span>${val}</span></div>`;
+    return row('Demand', s.demand, '#F6EBDC') + row('Gap', s.gap, '#F6C624') + row('Conversion', s.conversion, '#C99566');
+  }
+  function renderDiscover() {
+    const d = document.getElementById('dcDate');
+    if (d) d.textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    const f = YH_LIBRARY[0];
+    const fe = document.getElementById('dcFeatured');
+    if (fe && f) {
+      fe.innerHTML = `
+        <a class="dc-feature" href="#/r/${f.slug}">
+          <div class="dc-feature-body">
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <span class="yh-eyebrow" style="color:#F2C53D">Featured research · ${esc(f.category)}</span>
+              ${f.sample ? '<span class="lab lab-s" style="color:#DCC4E6">Sample</span>' : ''}
+            </div>
+            <div class="dc-feature-hl">${esc(f.headline)}</div>
+            <div class="dc-feature-dek">${esc(f.dek)}</div>
+            <div class="dc-feature-meta">${esc(f.name)} · ${esc(f.area)} · ${srcCount(f)} sources</div>
+          </div>
+          <div class="dc-feature-score">
+            <div style="display:flex;align-items:center;gap:14px">
+              <span class="dc-ball num">${score(f)}</span>
+              <span style="font:700 12.5px var(--font-head);letter-spacing:.06em;color:#D9CBB8">OPPORTUNITY<br>SCORE</span>
+            </div>
+            <div class="dc-meters">${meters(f)}</div>
+          </div>
+        </a>`;
+    }
+    // Fresh discoveries: only when there is more than the featured item.
+    const rest = YH_LIBRARY.slice(1);
+    const fs = document.getElementById('dcFreshSec');
+    if (fs) {
+      fs.hidden = rest.length === 0;
+      document.getElementById('dcFresh').innerHTML = rest.map(it => `
+        <a class="yh-card dc-card" href="#/r/${it.slug}">
+          <div style="display:flex;justify-content:space-between;align-items:center"><span class="num" style="font-family:var(--font-display);font-size:42px;font-weight:700;line-height:1;color:var(--heading)">${score(it)}</span>${it.sample ? lab('s') : ''}</div>
+          <span style="font-size:17px;font-weight:700;color:var(--heading)">${esc(it.name)}</span>
+          <span style="font-size:14.5px;line-height:1.45">${esc(it.card_line)}</span>
+          <span style="font-size:13px;color:var(--muted)">${esc(it.category)} · ${esc(it.area)}</span>
+        </a>`).join('');
+    }
+    // Ranking: only once there are at least three researched businesses.
+    const rs = document.getElementById('dcRankSec');
+    if (rs) {
+      rs.hidden = YH_LIBRARY.length < 3;
+      const sorted = YH_LIBRARY.slice().sort((a, b) => score(b) - score(a)).slice(0, 5);
+      document.getElementById('dcRank').innerHTML = sorted.map((it, i) => `
+        <a class="dc-rank-row" href="#/r/${it.slug}"><span class="num" style="font-family:var(--font-display);font-size:20px;font-weight:700;color:var(--accent)">${i + 1}</span>
+        <span style="display:flex;flex-direction:column;gap:2px"><span style="font-weight:700;color:var(--heading)">${esc(it.name)}</span><span style="font-size:13px;color:var(--muted)">${esc(it.area)}${it.sample ? ' · Sample' : ''}</span></span>
+        <span class="num" style="text-align:right;font-size:19px;font-weight:700;color:var(--heading)">${score(it)}</span></a>`).join('');
+    }
+  }
+
+  // ── Research page ──
+  function renderResearch(item) {
+    const r = item.report || {};
+    const s = r.signal_scores || {};
+    const sc = Number(r.overall_score) || 0;
+    const C = 2 * Math.PI * 52;
+    const tile = (name, val, color) => val == null ? '' :
+      `<div class="rs-tile"><b class="num">${val}</b><i><em style="width:${val}%;background:${color}"></em></i><small>${name}</small></div>`;
+    const themes = ((r.review_signals || {}).review_themes || []).map(t =>
+      /booking/i.test(t) ? `<span class="rs-chip warn">${esc(t.charAt(0).toUpperCase() + t.slice(1))} (most cited pain point)</span>` : `<span class="rs-chip">${esc(t.charAt(0).toUpperCase() + t.slice(1))}</span>`).join('');
+    const plays = (r.experiments || []).slice(0, 2).map(x => `
+      <div class="yh-card rs-play">
+        ${lab('r')}
+        <div class="rs-play-t">${esc(x.experiment)}</div>
+        <div style="font-size:14.5px;line-height:1.55;color:var(--muted)">Goal: ${esc(x.success_threshold)}${x.timeframe && !/day|week|month/i.test(x.success_threshold || '') ? ' within ' + esc(x.timeframe) : ''}.</div>
+        <div class="rs-play-s num"><span><b>${esc(x.impact)}</b> impact</span><span><b>${esc(x.effort)}</b> effort</span><span><b>${esc(x.confidence)}</b> confidence</span></div>
+      </div>`).join('');
+    const rows = item.rows.map(row => `
+      <div class="rs-row">
+        <span style="font-weight:600;display:flex;flex-direction:column;gap:5px;align-items:flex-start">${esc(row.m)}${lab(row.lab, 'rs-mlab')}</span>
+        <span class="v num"${row.bad ? ' style="color:var(--red)"' : ''}>${esc(row.v)}</span>
+        <span class="c num">${row.c ? esc(row.c) : '<span aria-label="not compared" style="opacity:.55">–</span>'}</span>
+        <span>${lab(row.lab)}</span>
+      </div>`).join('');
+    const finds = item.findings.map((f, i) => `
+      <div class="rs-find"><span class="rs-find-n num">${i + 1}</span><span style="font-size:16px;line-height:1.55">${esc(f.t)}<br><span style="font-size:13px;color:var(--muted)">${esc(f.src)}</span></span>${lab(f.lab)}</div>`).join('');
+    const srcs = item.sources.map(([a, b]) => `<div class="rs-src"><span style="font-weight:600">${esc(a)}</span><span style="color:var(--muted)">${esc(b)}</span></div>`).join('');
+
+    document.getElementById('researchView').innerHTML = `
+      <section class="yh-band rs-band">
+        <div class="rs-hero">
+          <div class="rs-hl">
+            <a class="rs-back" href="#/">‹ Back to Discover</a>
+            <div class="rs-eyebrow"><span class="yh-eyebrow">${esc(item.category)} · ${esc(item.area)}</span>${item.sample ? '<span class="lab lab-s">Sample report</span>' : ''}</div>
+            <h1 class="rs-title">${esc(item.name)}</h1>
+            <p class="rs-dek">${esc(item.dek)}</p>
+            <div class="rs-meta"><span>${srcCount(item)} sources · Signal confidence: ${esc(r.signal_confidence || 'Unknown')}</span>
+              <button class="yh-pill" onclick="yhShare(this)">Share</button>
+              ${item.sample ? '<button class="yh-pill" onclick="yhOpenDemo()">Open full report</button>' : ''}</div>
+          </div>
+          <div class="rs-score">
+            <div style="display:flex;align-items:center;gap:20px">
+              <div class="rs-ring"><svg width="124" height="124" viewBox="0 0 124 124" aria-hidden="true"><circle cx="62" cy="62" r="52" fill="none" stroke="#4A3527" stroke-width="12"></circle><circle cx="62" cy="62" r="52" fill="none" stroke="#F6C624" stroke-width="12" stroke-linecap="round" stroke-dasharray="${(C * sc / 100).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 62 62)"></circle></svg><span class="num">${sc}</span></div>
+              <div style="display:flex;flex-direction:column;gap:4px"><span style="font:700 12.5px var(--font-head);letter-spacing:.06em;color:#D9CBB8">OPPORTUNITY SCORE</span><span style="font-size:14px;color:#C9B8A6">out of 100</span></div>
+            </div>
+            <div class="rs-tiles">${tile('Demand', s.demand, '#F6EBDC')}${tile('Gap', s.gap, '#F6C624')}${tile('Conversion', s.conversion, '#C99566')}</div>
+          </div>
+        </div>
+      </section>
+      <div class="rs-body">
+        <nav class="rs-toc" aria-label="On this page"><span>On this page</span>
+          <button onclick="yhJump('rs-short')">The short version</button><button onclick="yhJump('rs-side')">Side by side</button>
+          <button onclick="yhJump('rs-find')">Key findings</button><button onclick="yhJump('rs-plays')">Next plays</button></nav>
+        <main class="rs-main">
+          <section class="rs-sec" id="rs-short"><h2 class="yh-h2">The short version</h2><p class="rs-quote">${esc(item.short)}</p>${lab('r')}</section>
+          <section class="rs-sec" id="rs-side"><h2 class="yh-h2">Side by side</h2>
+            <div class="yh-card rs-table"><div class="rs-row th"><span>Metric</span><span>${esc(item.name.split(' ')[0])}</span><span>Category avg</span><span>Evidence</span></div>${rows}</div></section>
+          <section class="rs-sec" id="rs-find"><h2 class="yh-h2">Key findings</h2><div class="yh-card">${finds}</div></section>
+          ${plays ? `<section class="rs-sec" id="rs-plays"><h2 class="yh-h2">Next plays</h2><div class="rs-plays">${plays}</div></section>` : ''}
+        </main>
+        <aside class="rs-aside">
+          ${themes ? `<section class="yh-card" style="padding:22px 24px;display:flex;flex-direction:column;gap:12px"><h2 class="yh-h2" style="font-size:20px">What reviewers say</h2><div class="rs-chips">${themes}</div>${lab('v')}</section>` : ''}
+          <section class="yh-card" style="padding:16px 24px 10px"><h2 class="yh-h2" style="font-size:20px;padding-bottom:6px">Sources</h2>${srcs}</section>
+          <section class="dc-cta"><h2>Research a business like this</h2><p>Run the same analysis on any local business.</p><a class="yh-btn-dark" href="#/analyze" style="align-self:flex-start">Open Analyze</a></section>
+        </aside>
+      </div>`;
+  }
+
+  // ── init: Discover is the default landing ──
+  window.addEventListener('hashchange', () => { route(); window.scrollTo(0, 0); });
+  document.addEventListener('DOMContentLoaded', () => {
+    yhReady = true;
+    syncHeaderCode();
+    route();
+  });
+})();
 </script>
