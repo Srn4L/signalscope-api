@@ -5000,7 +5000,45 @@ def get_niche_radius(niche):
     return NICHE_RADIUS_METERS['default']
 
 
+def _geocode_query(business_name, address=None, location=None):
+    """Address first, else business name + location, skipping missing parts."""
+    if address:
+        return address
+    return " ".join(p for p in (business_name, location) if p).strip()
+
+
+def _geocode_geoapify(query):
+    """(lat, lng) from Geoapify's free geocoder, or (None, None)."""
+    key = os.environ.get('GEOAPIFY_KEY', '')
+    if not key or not query or not api_budget_ok("geoapify"):
+        return None, None
+    try:
+        import requests as req
+        r = req.get('https://api.geoapify.com/v1/geocode/search',
+                    params={'text': query, 'apiKey': key, 'limit': 1}, timeout=6)
+        feats = (r.json() or {}).get('features', []) if r.status_code == 200 else []
+        if feats:
+            props = feats[0].get('properties', {})
+            if props.get('lat') is not None and props.get('lon') is not None:
+                return props['lat'], props['lon']
+        print(f"  [Provider] Geoapify geocode: no match (HTTP {r.status_code}) for {query[:60]!r}", flush=True)
+    except Exception as e:
+        log_error("Geoapify geocode", e, query=query)
+    return None, None
+
+
 def geocode_business(business_name, address=None, location=None):
+    '''
+    Returns (lat, lng). Uses Geoapify (free) first, then Google Geocoding as a
+    fallback when its API is enabled on the key.
+    '''
+    lat, lng = _geocode_geoapify(_geocode_query(business_name, address, location))
+    if lat is not None and lng is not None:
+        return lat, lng
+    return _geocode_google(business_name, address, location)
+
+
+def _geocode_google(business_name, address=None, location=None):
     '''
     Returns (lat, lng) for a business using Google Geocoding API.
     Tries address first, falls back to business name + location.
@@ -5012,7 +5050,7 @@ def geocode_business(business_name, address=None, location=None):
         return None, None
     try:
         import requests as req
-        query = address or f'{business_name} {location or ""}'
+        query = _geocode_query(business_name, address, location)
         r = req.get(
             'https://maps.googleapis.com/maps/api/geocode/json',
             params={'address': query, 'key': key},
@@ -5866,6 +5904,7 @@ def health_providers():
     if get_code_type(request) != "master":
         return jsonify({"ok": False, "error": "Owner access code required"}), 403
     import requests as _rq
+    init_clients()  # AI clients are created lazily on first analysis
 
     def _check(fn):
         t0 = time.time()
@@ -5947,7 +5986,7 @@ def health_providers():
         return {"configured": True, "ok": True, "detail": f"{getattr(m, 'id', CLAUDE_MODEL)} available"}
 
     providers = {
-        "google_places": _check(_google), "geoapify": _check(_geoapify), "tavily": _check(_tavily),
+        "google_geocoding": _check(_google), "geoapify": _check(_geoapify), "tavily": _check(_tavily),
         "serpapi": _check(_serpapi), "scraperapi": _check(_scraperapi),
         "openai": _check(_openai), "anthropic": _check(_anthropic),
     }

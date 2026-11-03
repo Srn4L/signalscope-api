@@ -54,7 +54,7 @@ def test_reports_each_provider(monkeypatch):
     assert p["serpapi"]["ok"] is False and p["serpapi"]["searches_left"] == 0
     assert p["scraperapi"]["configured"] is False
     assert p["tavily"]["ok"] is True
-    assert p["google_places"]["ok"] is True
+    assert p["google_geocoding"]["ok"] is True
     assert p["geoapify"]["ok"] is True
     assert p["openai"]["ok"] is True and p["anthropic"]["ok"] is True
     body = r.get_data(as_text=True)
