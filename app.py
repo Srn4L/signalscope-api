@@ -248,6 +248,10 @@ def _env_int(name, default):
     except (TypeError, ValueError):
         return default
 
+# Anthropic model used for deep analysis. Set CLAUDE_MODEL on Render to switch
+# models without a code change (older IDs are retired and return 404).
+CLAUDE_MODEL = (os.environ.get("CLAUDE_MODEL") or "claude-sonnet-5-5").strip()
+
 COST_LIMITS = {
     # (scope, kind): daily limit
     ("demo_ip", "search"):     _env_int("LIMIT_DEMO_SEARCHES_PER_IP", 3),
@@ -2466,7 +2470,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         ''')
 
         r2 = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=CLAUDE_MODEL,
             max_tokens=3000,
             messages=[{"role": "user", "content": claude_prompt}],
         )
@@ -2570,7 +2574,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         ''')
 
         r = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=CLAUDE_MODEL,
             max_tokens=3500,
             messages=[{"role": "user", "content": prompt}],
         )
