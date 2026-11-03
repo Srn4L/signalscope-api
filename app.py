@@ -252,6 +252,18 @@ def _env_int(name, default):
 # models without a code change (older IDs are retired and return 404).
 CLAUDE_MODEL = (os.environ.get("CLAUDE_MODEL") or "claude-sonnet-5-5").strip()
 
+
+def claude_text(resp):
+    """
+    Join the text blocks of an Anthropic response. Newer models can return a
+    thinking block before the answer, so content[0] is not always text.
+    """
+    parts = []
+    for block in getattr(resp, "content", None) or []:
+        if getattr(block, "type", None) == "text":
+            parts.append(getattr(block, "text", "") or "")
+    return "".join(parts)
+
 COST_LIMITS = {
     # (scope, kind): daily limit
     ("demo_ip", "search"):     _env_int("LIMIT_DEMO_SEARCHES_PER_IP", 3),
@@ -2567,7 +2579,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
             max_tokens=3000,
             messages=[{"role": "user", "content": claude_prompt}],
         )
-        claude_output = r2.content[0].text
+        claude_output = claude_text(r2)
 
         # Stage 3 - GPT: fact-check Claude + format final JSON
         schema = {
@@ -2671,7 +2683,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
             max_tokens=3500,
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = r.content[0].text.strip()
+        raw = claude_text(r).strip()
         raw = re.sub(r"^```json\s*", "", raw)
         raw = re.sub(r"```$", "", raw).strip()
         return json.loads(raw)
