@@ -3288,6 +3288,8 @@ async function runAnalysis() {
 
 // ── RENDER REPORT ──────────────────────────────────────────────────────────
 function render(r, noSave) {
+  const _sampleTag = $('rSampleTag');
+  if (_sampleTag && r !== DEMO_REPORT) _sampleTag.remove();
   $('loader').classList.remove('on');
   $('report').classList.add('on');
 
@@ -4053,6 +4055,13 @@ function hideDeepStatusBanner() {
   const ds = $('deepStatus');
   if (ds) ds.classList.remove('on');
 }
+function showDeepUnavailable() {
+  hideDeepStatusBanner();
+  const banner = $('deepBanner');
+  if (!banner) return;
+  banner.innerHTML = '<span><strong>Deep analysis isn\'t available right now.</strong> This is the fast report, built from the public signals found so far.</span>';
+  banner.style.display = 'flex';
+}
 function pollDeepAnalysis(jobId) {
   let attempts = 0;
   const maxAttempts = 150; // 300 seconds max polling (2s intervals)
@@ -4061,7 +4070,7 @@ function pollDeepAnalysis(jobId) {
     attempts++;
     if (attempts > maxAttempts) {
       clearInterval(_pollInterval);
-      hideDeepLoadingBanner();
+      showDeepUnavailable();
       return;
     }
 
@@ -4113,7 +4122,7 @@ function pollDeepAnalysis(jobId) {
 
       } else if (data.status === 'error') {
         clearInterval(_pollInterval);
-        hideDeepLoadingBanner();
+        showDeepUnavailable();
         console.warn('Deep analysis error:', data.error);
       }
     } catch(e) {
@@ -4264,6 +4273,8 @@ function runDemo() {
         renderAgentBrain(DEMO_BRAIN);
         renderHeatmap(DEMO_BRAIN.data_quality);
         render(DEMO_REPORT, true);
+        const rc = $('rCompany');
+        if (rc && !$('rSampleTag')) rc.insertAdjacentHTML('afterend', '<span id="rSampleTag" class="lab lab-s" style="margin-top:8px">Sample report</span>');
       }, 400);
     }
   }, 600);
@@ -6031,9 +6042,18 @@ function cleanProblemText(raw) {
   };
   window.yhShare = function (btn) {
     const url = location.href;
-    const done = () => { if (btn) { const t = btn.textContent; btn.textContent = 'Link copied'; setTimeout(() => { btn.textContent = t; }, 1800); } };
-    if (navigator.share) { navigator.share({ title: document.title, url }).catch(() => {}); return; }
-    if (navigator.clipboard) navigator.clipboard.writeText(url).then(done).catch(() => {});
+    const say = msg => { if (!btn) return; const t = btn.dataset.label || btn.textContent; btn.dataset.label = t; btn.textContent = msg; setTimeout(() => { btn.textContent = t; }, 2000); };
+    const touch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    if (touch && navigator.share) { navigator.share({ title: document.title, url }).catch(() => {}); return; }
+    const fallback = () => {
+      try {
+        const ta = document.createElement('textarea'); ta.value = url; ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
+        const ok = document.execCommand('copy'); ta.remove(); say(ok ? 'Link copied' : 'Copy the address bar link');
+      } catch (e) { say('Copy the address bar link'); }
+    };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(url).then(() => say('Link copied')).catch(fallback);
+    else fallback();
   };
   window.yhJump = function (id) {
     const el = document.getElementById(id);
