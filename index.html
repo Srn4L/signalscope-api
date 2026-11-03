@@ -1508,6 +1508,11 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
 .ws-box p{font-size:14px;line-height:1.55;color:var(--muted);margin:0;}
 .ws-stat{display:flex;align-items:baseline;gap:8px;}
 .ws-stat b{font-family:var(--font-display);font-size:32px;font-weight:700;color:var(--heading);}
+.yh-u-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;font-size:13px;}
+.yh-u-row i{grid-column:1/-1;display:block;height:6px;border-radius:3px;background:var(--card2);overflow:hidden;}
+.yh-u-row i b{display:block;height:100%;border-radius:3px;background:var(--accent-fill);}
+.yh-u-row.hot i b{background:var(--red);}
+.yh-u-row.off{opacity:.55;}
 .ws-note{padding:18px 20px;border-radius:18px;background:var(--card2);font-size:14px;line-height:1.55;color:var(--text);}
 
 /* ── MOBILE ── */
@@ -1518,7 +1523,8 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
 }
 @media (max-width:1000px){
   .dc-grid,.rs-hero,.rs-body,.ws-grid{grid-template-columns:minmax(0,1fr);}
-  .ws-aside{display:none;}
+  .ws-aside{position:static;padding-top:0;margin-bottom:24px;}
+  .ws-aside > :not(#yhUsageCard){display:none;}
   .rs-hero{gap:24px;}
 }
 @media (max-width:760px){
@@ -2271,6 +2277,11 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
 </div>
 </div><!-- /ws-main -->
 <aside class="ws-aside">
+  <section class="yh-card ws-box" id="yhUsageCard" hidden>
+    <div style="display:flex;justify-content:space-between;align-items:baseline"><h3>Usage today</h3><span id="yhUsageAsOf" style="font-size:12px;color:var(--muted)"></span></div>
+    <div id="yhUsageRows" style="display:flex;flex-direction:column;gap:9px"></div>
+    <p id="yhUsageNote" style="font-size:12.5px"></p>
+  </section>
   <section class="yh-card ws-box">
     <h3>Networks</h3>
     <div class="ws-stat"><b class="num" id="wsSavedCount">0</b><span style="color:var(--muted)">saved this session</span></div>
@@ -6018,7 +6029,7 @@ function cleanProblemText(raw) {
   };
   if (typeof window.updateAccessUI === 'function') {
     const _origAccess = window.updateAccessUI;
-    window.updateAccessUI = function () { _origAccess.apply(this, arguments); syncHeaderCode(); };
+    window.updateAccessUI = function () { _origAccess.apply(this, arguments); syncHeaderCode(); if (typeof refreshUsage === 'function') refreshUsage(); };
   }
   if (typeof window.updateNetworksBadge === 'function') {
     const _origBadge = window.updateNetworksBadge;
@@ -6191,12 +6202,55 @@ function cleanProblemText(raw) {
       </div>`;
   }
 
+  // ── Owner usage tracker (master code only, refreshes every 30s) ──
+  const USAGE_LABELS = {
+    searches: 'Searches (all users)', analyses: 'Deep analyses (all users)',
+    google_search: 'Google search', google_details: 'Google details', google_geocode: 'Google geocoding',
+    tavily: 'Tavily', serpapi: 'SerpAPI', scraperapi: 'ScraperAPI', geoapify: 'Geoapify',
+  };
+  let usageTimer = null;
+  function usageRow(label, used, cap) {
+    const off = cap === 0;
+    const pct = cap ? Math.min(100, Math.round(used / cap * 100)) : 0;
+    const right = off ? 'off' : (cap == null ? used : used + ' / ' + cap);
+    return '<div class="yh-u-row' + (off ? ' off' : pct >= 80 ? ' hot' : '') + '"><span>' + esc(label) + '</span><span class="num">' + esc(right) + '</span><i><b style="width:' + pct + '%"></b></i></div>';
+  }
+  async function refreshUsage() {
+    const card = document.getElementById('yhUsageCard');
+    const owner = typeof getCodeType === 'function' && getCodeType() === 'master';
+    if (!card) return;
+    card.hidden = !owner;
+    if (!owner || document.body.dataset.view !== 'workspace') return;
+    try {
+      const r = await fetch(PROXY_URL + '/health/usage', { headers: { 'X-Agent-Token': getToken() } });
+      const d = await r.json();
+      const rows = document.getElementById('yhUsageRows');
+      const note = document.getElementById('yhUsageNote');
+      if (!d.ok) { rows.innerHTML = ''; note.textContent = d.error || 'Usage unavailable.'; return; }
+      let html = usageRow(USAGE_LABELS.searches, d.actions.searches.used, d.actions.searches.cap)
+               + usageRow(USAGE_LABELS.analyses, d.actions.analyses.used, d.actions.analyses.cap);
+      Object.keys(d.apis).forEach(k => { html += usageRow(USAGE_LABELS[k] || k, d.apis[k].used, d.apis[k].cap); });
+      rows.innerHTML = html;
+      const serp = d.monthly && d.monthly.serpapi;
+      const h = Math.floor(d.resets_in_minutes / 60), m = d.resets_in_minutes % 60;
+      note.textContent = 'Resets in ' + h + 'h ' + m + 'm.' + (serp && serp.left != null ? ' SerpAPI: ' + serp.left + ' of ' + serp.per_month + ' left this month.' : '') + ' Your own searches count toward API calls only.';
+      document.getElementById('yhUsageAsOf').textContent = 'live';
+    } catch (e) {
+      document.getElementById('yhUsageNote').textContent = 'Could not reach the server.';
+    }
+  }
+  function startUsage() {
+    refreshUsage();
+    if (!usageTimer) usageTimer = setInterval(refreshUsage, 30000);
+  }
+
   // ── init: Discover is the default landing ──
-  window.addEventListener('hashchange', () => { route(); window.scrollTo(0, 0); });
+  window.addEventListener('hashchange', () => { route(); window.scrollTo(0, 0); refreshUsage(); });
   document.addEventListener('DOMContentLoaded', () => {
     yhReady = true;
     syncHeaderCode();
     route();
+    startUsage();
   });
 })();
 </script>
