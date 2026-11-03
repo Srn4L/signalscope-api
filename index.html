@@ -1508,11 +1508,14 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
 .ws-box p{font-size:14px;line-height:1.55;color:var(--muted);margin:0;}
 .ws-stat{display:flex;align-items:baseline;gap:8px;}
 .ws-stat b{font-family:var(--font-display);font-size:32px;font-weight:700;color:var(--heading);}
-.yh-u-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;font-size:13px;}
-.yh-u-row i{grid-column:1/-1;display:block;height:6px;border-radius:3px;background:var(--card2);overflow:hidden;}
-.yh-u-row i b{display:block;height:100%;border-radius:3px;background:var(--accent-fill);}
-.yh-u-row.hot i b{background:var(--red);}
-.yh-u-row.off{opacity:.55;}
+.yh-u-table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums;}
+.yh-u-table th{font:600 11px var(--font-head);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);text-align:right;padding:0 0 6px 8px;border-bottom:1px solid var(--border);}
+.yh-u-table th:first-child,.yh-u-table td:first-child{text-align:left;padding-left:0;}
+.yh-u-table td{text-align:right;padding:7px 0 7px 8px;border-bottom:1px solid var(--border);}
+.yh-u-table tr:last-child td{border-bottom:none;}
+.yh-u-table tr.hot td:last-child{color:var(--red);font-weight:700;}
+.yh-u-table tr.off td{opacity:.55;}
+.yh-u-table tr.sep td{border-bottom:2px solid var(--border2);}
 .ws-note{padding:18px 20px;border-radius:18px;background:var(--card2);font-size:14px;line-height:1.55;color:var(--text);}
 
 /* ── MOBILE ── */
@@ -2279,7 +2282,7 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
 <aside class="ws-aside">
   <section class="yh-card ws-box" id="yhUsageCard" hidden>
     <div style="display:flex;justify-content:space-between;align-items:baseline"><h3>Usage today</h3><span id="yhUsageAsOf" style="font-size:12px;color:var(--muted)"></span></div>
-    <div id="yhUsageRows" style="display:flex;flex-direction:column;gap:9px"></div>
+    <table class="yh-u-table"><thead><tr><th>Source</th><th>Used</th><th>Cap</th><th>Left</th></tr></thead><tbody id="yhUsageRows"></tbody></table>
     <p id="yhUsageNote" style="font-size:12.5px"></p>
   </section>
   <section class="yh-card ws-box">
@@ -6204,16 +6207,18 @@ function cleanProblemText(raw) {
 
   // ── Owner usage tracker (master code only, refreshes every 30s) ──
   const USAGE_LABELS = {
-    searches: 'Searches (all users)', analyses: 'Deep analyses (all users)',
+    searches: 'User searches', analyses: 'User analyses',
     google_search: 'Google search', google_details: 'Google details', google_geocode: 'Google geocoding',
     tavily: 'Tavily', serpapi: 'SerpAPI', scraperapi: 'ScraperAPI', geoapify: 'Geoapify',
   };
   let usageTimer = null;
-  function usageRow(label, used, cap) {
+  function usageRow(label, used, cap, sep) {
     const off = cap === 0;
-    const pct = cap ? Math.min(100, Math.round(used / cap * 100)) : 0;
-    const right = off ? 'off' : (cap == null ? used : used + ' / ' + cap);
-    return '<div class="yh-u-row' + (off ? ' off' : pct >= 80 ? ' hot' : '') + '"><span>' + esc(label) + '</span><span class="num">' + esc(right) + '</span><i><b style="width:' + pct + '%"></b></i></div>';
+    const left = off || cap == null ? null : Math.max(0, cap - used);
+    const hot = !off && cap ? used / cap >= 0.8 : false;
+    const cls = [off ? 'off' : '', hot ? 'hot' : '', sep ? 'sep' : ''].join(' ').trim();
+    return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td>' + esc(label) + '</td><td>' + esc(used) + '</td><td>'
+      + (off ? 'off' : esc(cap == null ? '-' : cap)) + '</td><td>' + (left == null ? '-' : esc(left)) + '</td></tr>';
   }
   async function refreshUsage() {
     const card = document.getElementById('yhUsageCard');
@@ -6228,7 +6233,7 @@ function cleanProblemText(raw) {
       const note = document.getElementById('yhUsageNote');
       if (!d.ok) { rows.innerHTML = ''; note.textContent = d.error || 'Usage unavailable.'; return; }
       let html = usageRow(USAGE_LABELS.searches, d.actions.searches.used, d.actions.searches.cap)
-               + usageRow(USAGE_LABELS.analyses, d.actions.analyses.used, d.actions.analyses.cap);
+               + usageRow(USAGE_LABELS.analyses, d.actions.analyses.used, d.actions.analyses.cap, true);
       Object.keys(d.apis).forEach(k => { html += usageRow(USAGE_LABELS[k] || k, d.apis[k].used, d.apis[k].cap); });
       rows.innerHTML = html;
       const serp = d.monthly && d.monthly.serpapi;
