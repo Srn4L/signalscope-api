@@ -3562,6 +3562,16 @@ MODE_WEIGHTS = {
         "digital_gap":       0.5,
         "low_review_count":  0.7,
     },
+    "feature": {
+        # Worth featuring: quality without popularity. Few reviews or followers
+        # are Unknown, not negative.
+        "high_rating":       2.0,
+        "low_review_count":  1.6,
+        "weak_social":       1.4,
+        "local_presence":    1.0,
+        "high_review_count": 0.3,
+        "strong_social":     0.3,
+    },
     "venture": {
         "digital_gap":       1.5,
         "low_review_count":  1.3,
@@ -3978,6 +3988,13 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
                 "impact": "neutral",
                 "weight": "medium",
             })
+        elif parent_mode == "feature":
+            reasons.append({
+                "key": "unreviewed",
+                "signal": "Unknown: no public reviews yet - unproven, but a chance to be the first to cover it.",
+                "impact": "neutral",
+                "weight": "medium",
+            })
         else:
             reasons.append({
                 "key": "demand_unknown",
@@ -4071,6 +4088,36 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
                 "signal": "Partnership fit: visual business category - natural fit for creator, brand, or content collaboration.",
                 "impact": "positive",
                 "weight": "medium",
+            })
+
+    elif parent_mode == "feature":
+        if 0 < reviews < 50 and rating >= 4.5:
+            reasons.append({
+                "key": "under_discovered",
+                "signal": f"Under-discovered: {rating}\u2605 from only {reviews} reviews - customers rate it highly but few people know it yet.",
+                "impact": "positive",
+                "weight": "high",
+            })
+        if gaps["social_gap"] >= 60 and reviews < 500:
+            reasons.append({
+                "key": "low_visibility",
+                "signal": "Little social media presence - low visibility is an opening for coverage, not a sign of a weak business.",
+                "impact": "positive",
+                "weight": "medium",
+            })
+        if reviews >= 500:
+            reasons.append({
+                "key": "already_known",
+                "signal": f"Already well known ({reviews} reviews) - less of a discovery for your audience.",
+                "impact": "negative",
+                "weight": "medium",
+            })
+        if biz["visual_category"]:
+            reasons.append({
+                "key": "visual_category",
+                "signal": "Visual category - products and space tend to film and photograph well.",
+                "impact": "positive",
+                "weight": "low",
             })
 
     elif parent_mode == "market":
@@ -4185,6 +4232,21 @@ def _build_opportunity_summary(signals: dict, sub_scores: dict, score: int, mode
             return ("Early-stage or data-sparse business - partnership viability depends on niche "
                     "visibility and category fit.")
 
+    elif mode == "feature":
+        count, rating = rep["review_count"], rep["rating"]
+        if not count:
+            return ("New or unreviewed business - no public reviews yet, so quality is unproven. "
+                    "A chance to be the first to cover it.")
+        if rating >= 4.5 and count < 50:
+            return (f"Rated {rating}\u2605 by its first {count} reviewers but still largely unknown - "
+                    "a strong under-the-radar pick.")
+        if not has_social:
+            return ("Well reviewed locally with little social media presence - "
+                    "the kind of place a feed would never show you.")
+        if count >= 500:
+            return "Popular and well documented already - less of a discovery for your audience."
+        return "Solid local reputation with room to be discovered by a wider audience."
+
     elif mode == "market":
         if has_demand and has_website:
             return (f"Established category player ({rep['review_count']} reviews, {rep['rating']}★) "
@@ -4231,6 +4293,16 @@ def infer_objective_mode(goal: str) -> str:
         "leads", "lead gen", "outreach", "prospect", "cold", "pitch",
     ]
 
+    feature_kw = [
+        "hidden gem", "gems", "hidden spot", "hidden place", "underrated", "under the radar", "under-the-radar", "worth featuring",
+        "to feature", "food review", "reviewer", "undiscovered", "overlooked",
+        "best kept secret", "deserve more attention", "deserves more attention",
+        "just opened", "newly opened", "new spots", "unreviewed",
+    ]
+    collab_kw = ["collab", "collaboration", "partner", "partnership", "pop-up", "pop up",
+                 "sponsor", "brand deal"]
+    if any(kw in g for kw in collab_kw):      return "partnership"
+    if any(kw in g for kw in feature_kw):     return "feature"
     if any(kw in g for kw in partnership_kw): return "partnership"
     if any(kw in g for kw in market_kw):      return "market"
     if any(kw in g for kw in outreach_kw):    return "outreach"
@@ -4243,6 +4315,14 @@ def infer_objective_mode(goal: str) -> str:
 # the final opportunity score.
 
 SUBSCORE_WEIGHTS = {
+    "feature": {
+        "reputation": 0.30,   # rating quality, not volume
+        "gap":        0.30,   # under-discovered
+        "quality":    0.10,
+        "timing":     0.15,   # recently opened / growing
+        "contact":    0.05,
+        "fit":        0.10,
+    },
     "outreach": {
         "reputation": 0.25,   # demand proof matters
         "gap":        0.30,   # gap is the core signal
@@ -4315,6 +4395,11 @@ _PARENT_MODE_ALIAS = {
 }
 
 SIGNAL_SCORE_WEIGHTS = {
+    "feature": {
+        "demand":     0.40,   # quality evidence (rating), not popularity
+        "gap":        0.40,   # under-discovered
+        "conversion": 0.20,
+    },
     "outreach": {
         "demand":     0.30,
         "gap":        0.40,
@@ -4450,11 +4535,62 @@ def compute_signal_scores(signals: dict, sub_scores: dict, mode: str = "outreach
     )
     conversion = max(0, min(round(conversion_raw), 100))
 
+    if parent_mode == "feature":
+        demand, gap, conversion = _feature_signal_scores(signals)
+
     return {
         "demand":     demand,
         "gap":        gap,
         "conversion": conversion,
     }
+
+
+def _feature_signal_scores(signals: dict) -> tuple:
+    """
+    Worth-featuring scores. Demand is quality evidence, not popularity: rating
+    matters, review volume does not. Zero reviews is Unknown (neutral), and a
+    small sample is pulled toward neutral rather than trusted fully. Gap is
+    how under-discovered the business is: fewer reviews and a thinner social
+    presence rank higher, the opposite of popularity.
+    """
+    rep  = signals["reputation"]
+    gaps = signals["gaps"]
+    tim  = signals["timing"]
+    biz  = signals["business_type"]
+    pres = signals["presence"]
+    rating, count = float(rep["rating"] or 0), int(rep["review_count"] or 0)
+
+    if count == 0 or rating == 0:
+        quality = 55                                   # Unknown: neutral
+    else:
+        if rating >= 4.8:   quality = 92
+        elif rating >= 4.6: quality = 85
+        elif rating >= 4.4: quality = 76
+        elif rating >= 4.2: quality = 66
+        elif rating >= 4.0: quality = 56
+        elif rating >= 3.5: quality = 38
+        else:               quality = 20
+        if count < 5:                                  # small sample
+            quality = round(55 + (quality - 55) * (count / 5))
+    demand = max(0, min(100, round(quality * 0.85 + min(tim["timing_score"], 100) * 0.15)))
+
+    if count == 0:      visibility_gap = 85
+    elif count < 20:    visibility_gap = 90
+    elif count < 50:    visibility_gap = 78
+    elif count < 100:   visibility_gap = 62
+    elif count < 200:   visibility_gap = 42
+    elif count < 500:   visibility_gap = 22
+    else:               visibility_gap = 8
+    gap = max(0, min(100, round(visibility_gap * 0.7 + min(gaps["social_gap"], 100) * 0.3)))
+
+    conversion = (
+        (35 if biz["is_independent"] else 5)
+        + (20 if biz["visual_category"] else 10)
+        + (20 if pres["has_google_presence"] else 5)
+        + (15 if pres["has_website"] or pres["has_social"] else 5)
+        + (10 if signals["contactability"]["contact_score"] > 30 else 0)
+    )
+    return demand, gap, max(0, min(100, conversion))
 
 
 def _build_top_signal(signal_scores: dict, signals: dict, mode: str) -> str:
@@ -4473,6 +4609,21 @@ def _build_top_signal(signal_scores: dict, signals: dict, mode: str) -> str:
 
     # Resolve alias for logic
     parent_mode = _PARENT_MODE_ALIAS.get(mode, mode)
+
+    # ── Feature (worth featuring) ─────────────────────────────────────────────
+    if parent_mode == "feature":
+        count, rating = int(rep["review_count"] or 0), float(rep["rating"] or 0)
+        if count == 0:
+            return "New or unreviewed - be the first to cover it"
+        if count >= 500:
+            return "Already well known - less of a discovery"
+        if rating >= 4.6 and count < 50:
+            return f"Highly rated ({rating}\u2605) with only {count} reviews - under-discovered"
+        if rating >= 4.4 and gaps["social_gap"] >= 60:
+            return "Loved locally, barely visible online"
+        if rating >= 4.4 and count < 200:
+            return "Strong reviews, still under the radar"
+        return "Worth a look - limited signal so far"
 
     # ── Outreach ──────────────────────────────────────────────────────────────
     if parent_mode == "outreach":
@@ -5271,6 +5422,7 @@ _QUICK_INSIGHT_MODE_FALLBACK = {
     "partnership": "Some signals present — assess complementary fit.",
     "acquisition": "Review operational signals before pursuing.",
     "market":      "Market signals captured — compare against competitors.",
+    "feature":     "Worth a look - check reviews and photos before you cover it.",
     "venture":     "Early signals only — monitor for growth indicators.",
 }
 
@@ -5437,7 +5589,11 @@ def prospect():
     if code_type == 'demo' and not request.headers.get('X-Agent-Token'):
         limit = min(limit, 3)
 
-    mode             = (body.get('mode') or SCOUT_DEFAULT_MODE).lower()
+    _req_mode        = (body.get('mode') or '').lower().strip()
+    if not _req_mode or _req_mode == 'auto':
+        # No explicit lens: detect the opportunity intent from the user's words
+        _req_mode = infer_objective_mode(body.get('goal') or body.get('user_query') or '')
+    mode             = _req_mode or SCOUT_DEFAULT_MODE
     hard_filters     = body.get('hard_filters') or {}
     soft_preferences = body.get('soft_preferences') or {}
     exclusions       = [str(x).lower() for x in (body.get('exclusions') or [])]
