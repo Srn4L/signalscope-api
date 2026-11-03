@@ -1508,14 +1508,6 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
 .ws-box p{font-size:14px;line-height:1.55;color:var(--muted);margin:0;}
 .ws-stat{display:flex;align-items:baseline;gap:8px;}
 .ws-stat b{font-family:var(--font-display);font-size:32px;font-weight:700;color:var(--heading);}
-.yh-u-table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums;}
-.yh-u-table th{font:600 11px var(--font-head);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);text-align:right;padding:0 0 6px 8px;border-bottom:1px solid var(--border);}
-.yh-u-table th:first-child,.yh-u-table td:first-child{text-align:left;padding-left:0;}
-.yh-u-table td{text-align:right;padding:7px 0 7px 8px;border-bottom:1px solid var(--border);}
-.yh-u-table tr:last-child td{border-bottom:none;}
-.yh-u-table tr.hot td:last-child{color:var(--red);font-weight:700;}
-.yh-u-table tr.off td{opacity:.55;}
-.yh-u-table tr.sep td{border-bottom:2px solid var(--border2);}
 .ws-note{padding:18px 20px;border-radius:18px;background:var(--card2);font-size:14px;line-height:1.55;color:var(--text);}
 
 /* ── MOBILE ── */
@@ -1526,8 +1518,7 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
 }
 @media (max-width:1000px){
   .dc-grid,.rs-hero,.rs-body,.ws-grid{grid-template-columns:minmax(0,1fr);}
-  .ws-aside{position:static;padding-top:0;margin-bottom:24px;}
-  .ws-aside > :not(#yhUsageCard){display:none;}
+  .ws-aside{display:none;}
   .rs-hero{gap:24px;}
 }
 @media (max-width:760px){
@@ -2094,13 +2085,14 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
   <!-- Inferred lens + compact override -->
   <div class="scout-lens-row">
     <div style="display:flex;flex-direction:column;gap:4px;">
-      <div class="scout-lens-hint" id="scoutLensHint">Scoring lens: <strong id="scoutLensLabel">Outreach</strong> <span id="scoutAutoTag" style="font-size:8px;letter-spacing:.1em;color:var(--accent);opacity:.85;background:var(--accent-dim);padding:1px 6px;border-radius:8px;border:1px solid rgba(232,178,30,.2);">AUTO</span></div>
+      <div class="scout-lens-hint" id="scoutLensHint">Looking to: <strong id="scoutLensLabel">Find clients</strong> <span id="scoutAutoTag" style="font-size:8px;letter-spacing:.1em;color:var(--accent);opacity:.85;background:var(--accent-dim);padding:1px 6px;border-radius:8px;border:1px solid rgba(232,178,30,.2);">AUTO</span></div>
       <div style="font-size:9px;color:var(--muted2);" id="scoutLensSubHint">Inferred from your goal · Override below if needed</div>
     </div>
     <div class="scout-lens-override">
-      <button class="scout-lens-opt" data-lens="outreach" onclick="overrideLens(this)">Outreach</button>
-      <button class="scout-lens-opt" data-lens="partnership" onclick="overrideLens(this)">Partnership</button>
-      <button class="scout-lens-opt" data-lens="market" onclick="overrideLens(this)">Market</button>
+      <button class="scout-lens-opt" data-lens="feature" onclick="overrideLens(this)">Worth featuring</button>
+      <button class="scout-lens-opt" data-lens="outreach" onclick="overrideLens(this)">Find clients</button>
+      <button class="scout-lens-opt" data-lens="partnership" onclick="overrideLens(this)">Partners</button>
+      <button class="scout-lens-opt" data-lens="market" onclick="overrideLens(this)">Know your market</button>
       <button class="scout-lens-opt auto-active" id="lensAutoBtn" onclick="resetLensAuto()" title="Reset to auto-detect from goal">↺ Auto</button>
     </div>
   </div>
@@ -2280,11 +2272,6 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
 </div>
 </div><!-- /ws-main -->
 <aside class="ws-aside">
-  <section class="yh-card ws-box" id="yhUsageCard" hidden>
-    <div style="display:flex;justify-content:space-between;align-items:baseline"><h3>Usage today</h3><span id="yhUsageAsOf" style="font-size:12px;color:var(--muted)"></span></div>
-    <table class="yh-u-table"><thead><tr><th>Source</th><th>Used</th><th>Cap</th><th>Left</th></tr></thead><tbody id="yhUsageRows"></tbody></table>
-    <p id="yhUsageNote" style="font-size:12.5px"></p>
-  </section>
   <section class="yh-card ws-box">
     <h3>Networks</h3>
     <div class="ws-stat"><b class="num" id="wsSavedCount">0</b><span style="color:var(--muted)">saved this session</span></div>
@@ -2669,6 +2656,9 @@ const SIGNAL_PATTERNS = [
 ];
 
 // ── Mode keyword lists ─────────────────────────────────────────────────
+const FEATURE_KWORDS     = ['hidden gem','gems','hidden spot','underrated','under the radar','under-the-radar','worth featuring','to feature','food review','reviewer','undiscovered','overlooked','best kept secret','deserve more attention','deserves more attention','just opened','newly opened','new spots','unreviewed'];
+const MARKET_KWORDS      = ['competitor','competition','compare','comparison','market research','landscape','benchmark','how does my','how do i compare','my market'];
+const COLLAB_KWORDS      = ['collab','collaboration','partner','partnership','pop-up','pop up','sponsor','brand deal'];
 const PARTNERSHIP_KWORDS = ['content creator','photographer','collab','collaboration','partnership','perform','comedian','dj','artist','pop-up','pop up','event','venue','brand deal','singer','musician','influencer','ugc','sponsor'];
 const OUTREACH_KWORDS    = ['seo','website','booking','leads','digital presence','low social engagement','weak instagram','needs content','no booking','follow-up','follow up','crm','marketing','weak seo','no website'];
 
@@ -2775,7 +2765,10 @@ function inferScoutIntent(goalText, businessTypeInput, locationInput, selectedMo
   // ── Mode ──────────────────────────────────────────────────────────────
   let mode = (selectedMode && selectedMode !== 'auto') ? selectedMode : null;
   if (!mode) {
-    if (PARTNERSHIP_KWORDS.some(k => norm.includes(k))) mode = 'partnership';
+    if (COLLAB_KWORDS.some(k => norm.includes(k))) mode = 'partnership';
+    else if (FEATURE_KWORDS.some(k => norm.includes(k))) mode = 'feature';
+    else if (MARKET_KWORDS.some(k => norm.includes(k))) mode = 'market';
+    else if (PARTNERSHIP_KWORDS.some(k => norm.includes(k))) mode = 'partnership';
     else if (OUTREACH_KWORDS.some(k => norm.includes(k))) mode = 'outreach';
     else mode = 'outreach';
   }
@@ -2945,7 +2938,7 @@ function updateLensUI(mode) {
 }
 
 function _updateLensDisplay(mode, isAuto) {
-  const labels = { outreach: 'Outreach', partnership: 'Partnership', market: 'Market',
+  const labels = { feature: 'Worth featuring', outreach: 'Find clients', partnership: 'Partners', market: 'Know your market',
                    referral: 'Referral', acquisition: 'Acquisition', venture: 'Venture' };
   const labelEl   = $('scoutLensLabel');
   const autoTag   = $('scoutAutoTag');
@@ -4612,8 +4605,8 @@ function renderScoutResults(data) {
   const mode = (leads[0] && leads[0].inferred_mode) || data.mode || 'outreach';
 
   const modeLabels = {
-    outreach:'Outreach Targets', referral:'Referral Network', partnership:'Partnerships',
-    acquisition:'Acquisition Candidates', market:'Market Intelligence', venture:'Venture Research'
+    feature:'Worth Featuring', outreach:'Find Clients', referral:'Referral Network', partnership:'Partners',
+    acquisition:'Acquisition Candidates', market:'Know Your Market', venture:'Venture Research'
   };
   const modeLabel = modeLabels[mode] || mode.charAt(0).toUpperCase() + mode.slice(1);
 
@@ -6032,7 +6025,7 @@ function cleanProblemText(raw) {
   };
   if (typeof window.updateAccessUI === 'function') {
     const _origAccess = window.updateAccessUI;
-    window.updateAccessUI = function () { _origAccess.apply(this, arguments); syncHeaderCode(); if (typeof refreshUsage === 'function') refreshUsage(); };
+    window.updateAccessUI = function () { _origAccess.apply(this, arguments); syncHeaderCode(); };
   }
   if (typeof window.updateNetworksBadge === 'function') {
     const _origBadge = window.updateNetworksBadge;
@@ -6205,57 +6198,12 @@ function cleanProblemText(raw) {
       </div>`;
   }
 
-  // ── Owner usage tracker (master code only, refreshes every 30s) ──
-  const USAGE_LABELS = {
-    searches: 'User searches', analyses: 'User analyses',
-    google_search: 'Google search', google_details: 'Google details', google_geocode: 'Google geocoding',
-    tavily: 'Tavily', serpapi: 'SerpAPI', scraperapi: 'ScraperAPI', geoapify: 'Geoapify',
-  };
-  let usageTimer = null;
-  function usageRow(label, used, cap, sep) {
-    const off = cap === 0;
-    const left = off || cap == null ? null : Math.max(0, cap - used);
-    const hot = !off && cap ? used / cap >= 0.8 : false;
-    const cls = [off ? 'off' : '', hot ? 'hot' : '', sep ? 'sep' : ''].join(' ').trim();
-    return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td>' + esc(label) + '</td><td>' + esc(used) + '</td><td>'
-      + (off ? 'off' : esc(cap == null ? '-' : cap)) + '</td><td>' + (left == null ? '-' : esc(left)) + '</td></tr>';
-  }
-  async function refreshUsage() {
-    const card = document.getElementById('yhUsageCard');
-    const owner = typeof getCodeType === 'function' && getCodeType() === 'master';
-    if (!card) return;
-    card.hidden = !owner;
-    if (!owner || document.body.dataset.view !== 'workspace') return;
-    try {
-      const r = await fetch(PROXY_URL + '/health/usage', { headers: { 'X-Agent-Token': getToken() } });
-      const d = await r.json();
-      const rows = document.getElementById('yhUsageRows');
-      const note = document.getElementById('yhUsageNote');
-      if (!d.ok) { rows.innerHTML = ''; note.textContent = d.error || 'Usage unavailable.'; return; }
-      let html = usageRow(USAGE_LABELS.searches, d.actions.searches.used, d.actions.searches.cap)
-               + usageRow(USAGE_LABELS.analyses, d.actions.analyses.used, d.actions.analyses.cap, true);
-      Object.keys(d.apis).forEach(k => { html += usageRow(USAGE_LABELS[k] || k, d.apis[k].used, d.apis[k].cap); });
-      rows.innerHTML = html;
-      const serp = d.monthly && d.monthly.serpapi;
-      const h = Math.floor(d.resets_in_minutes / 60), m = d.resets_in_minutes % 60;
-      note.textContent = 'Resets in ' + h + 'h ' + m + 'm.' + (serp && serp.left != null ? ' SerpAPI: ' + serp.left + ' of ' + serp.per_month + ' left this month.' : '') + ' Your own searches count toward API calls only.';
-      document.getElementById('yhUsageAsOf').textContent = 'live';
-    } catch (e) {
-      document.getElementById('yhUsageNote').textContent = 'Could not reach the server.';
-    }
-  }
-  function startUsage() {
-    refreshUsage();
-    if (!usageTimer) usageTimer = setInterval(refreshUsage, 30000);
-  }
-
   // ── init: Discover is the default landing ──
-  window.addEventListener('hashchange', () => { route(); window.scrollTo(0, 0); refreshUsage(); });
+  window.addEventListener('hashchange', () => { route(); window.scrollTo(0, 0); });
   document.addEventListener('DOMContentLoaded', () => {
     yhReady = true;
     syncHeaderCode();
     route();
-    startUsage();
   });
 })();
 </script>
