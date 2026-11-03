@@ -160,6 +160,10 @@ try:
         increment_usage,
     )
     _DB_AVAILABLE = True
+    try:
+        from database_service import get_usage_summary
+    except Exception:
+        get_usage_summary = None
 except (ImportError, SyntaxError) as _db_import_err:
     print(f"[WARN] database unavailable: {_db_import_err}", flush=True)
     _DB_AVAILABLE = False
@@ -5993,6 +5997,45 @@ def health_providers():
     for name, res in providers.items():
         print(f"  [Providers] {name}: ok={res.get('ok')} {res.get('detail', '')}", flush=True)
     return jsonify({"ok": True, "providers": providers, "caps": API_CALL_LIMITS})
+
+
+@app.route('/health/usage', methods=['GET'])
+def health_usage():
+    """
+    Owner-only live usage for today (UTC): user actions and paid API calls
+    against their caps, plus SerpAPI's monthly searches left from its free
+    account endpoint. Makes no paid calls.
+    """
+    if get_code_type(request) != "master":
+        return jsonify({"ok": False, "error": "Owner access code required"}), 403
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    now = _dt.now(_tz.utc)
+    summary = get_usage_summary(now.date()) if (_DB_AVAILABLE and get_usage_summary) else None
+    if summary is None:
+        return jsonify({"ok": False, "error": "Usage counters unavailable (database offline)",
+                        "note": "Limits fail open while the database is offline."}), 503
+    g = summary["global"]
+    apis = {name: {"used": g.get("api_" + name, 0), "cap": cap} for name, cap in API_CALL_LIMITS.items()}
+    actions = {
+        "searches": {"used": g.get("search", 0), "cap": COST_LIMITS.get(("global", "search"))},
+        "analyses": {"used": g.get("analysis", 0), "cap": COST_LIMITS.get(("global", "analysis"))},
+        "demo_searches": {"used": summary["demo_ip_total"].get("search", 0),
+                          "cap_per_visitor": COST_LIMITS.get(("demo_ip", "search"))},
+    }
+    monthly = {}
+    if SERP_API_KEY:
+        try:
+            import requests as _rq
+            d = _rq.get("https://serpapi.com/account.json", params={"api_key": SERP_API_KEY}, timeout=8).json()
+            monthly["serpapi"] = {"left": d.get("total_searches_left", d.get("plan_searches_left")),
+                                  "per_month": d.get("searches_per_month")}
+        except Exception as e:
+            monthly["serpapi"] = {"error": type(e).__name__}
+    tomorrow = (now + _td(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return jsonify({"ok": True, "day": now.date().isoformat(), "as_of": now.isoformat(timespec="seconds"),
+                    "resets_in_minutes": int((tomorrow - now).total_seconds() // 60),
+                    "actions": actions, "apis": apis, "monthly": monthly,
+                    "note": "Master-code searches and analyses are not counted in actions; their API calls are."})
 
 
 @app.route('/init-db', methods=['POST'])
