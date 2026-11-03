@@ -1230,9 +1230,9 @@ def _social_state(text):
 _CONF_ORDER = {"low": 0, "medium": 1, "high": 2}
 
 
-def verify_fast_report(report, social_text, data_quality):
+def verify_fast_report(report, social_text, data_quality, social_links=None):
     """
-    Backend check on the fast AI report, so the AI explains but does not
+    Backend check on an AI report (fast and deep), so the AI explains but does not
     overstate. Removes platform scores for platforms with no verified content,
     and caps confidence levels at what the data coverage supports. Only adds a
     'verification' field; existing fields keep their shape.
@@ -1241,7 +1241,7 @@ def verify_fast_report(report, social_text, data_quality):
         return report
     try:
         verified = {p.lower() for p, t in (social_text or {}).items() if _social_state(t) == "verified"}
-        linked   = {p.lower() for p in (social_text or {}).keys()}
+        linked   = {p.lower() for p in list((social_text or {}).keys()) + list((social_links or {}).keys())}
 
         removed = []
         ps = report.get("platform_scores")
@@ -2335,6 +2335,7 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
         report["_complexity_score"] = compute_complexity(website_pages, social_text, review_text, competitors, social_links)
 
         data_quality    = build_data_quality(website_pages, social_text, review_text, competitors)
+        report          = verify_fast_report(report, social_text, data_quality, social_links)
         routing_reasons = build_routing_reasons(website_pages, social_text, review_text, competitors, data_quality)
 
         agent_brain = {
@@ -2435,7 +2436,9 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         "website_pages": website_pages,
         "social_text":   social_text,
         "social_platforms_detected": list((social_links or {}).keys()),
-        "social_content_available":  [p for p in social_text if len(social_text.get(p,"")) > 100],
+        "social_content_available":  [p for p in social_text if _social_state(social_text.get(p)) == "verified"],
+        "social_linked_not_verified": [p for p in set(social_text) | set(social_links or {})
+                                       if _social_state(social_text.get(p)) != "verified"],
         "review_text":   review_text,
         "pricing_text":  pricing_text,
         "competitors":   competitors,
@@ -2452,7 +2455,10 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         RAW DATA:
         Website: {json.dumps(website_pages)[:3000]}
         Social Platforms Detected: {list((social_links or {}).keys())}
+        Social Content Actually Read: {raw_data["social_content_available"]}
+        Social Linked But Not Read (metadata only or blocked): {raw_data["social_linked_not_verified"]}
         Social Content: {json.dumps(social_text)[:2000]}
+        RULE: Only describe social content (formats, video, posting habits, engagement) for platforms whose content was actually read. Profiles that are linked but not read are 'linked, content not verified': do not call them strong, weak, active or inactive, and do not give them platform_scores.
         Reviews: {review_text[:1500]}
         Pricing: {pricing_text[:4000]}
         Competitors: {json.dumps(competitors)[:1500]}
@@ -2516,7 +2522,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         # pricing_text already contains formatted booking + trend intelligence
         # Build social state for Claude
         _s_detected = list((social_links or {}).keys())
-        _s_content  = [p for p in social_text if len(social_text.get(p,"")) > 100]
+        _s_content  = [p for p in social_text if _social_state(social_text.get(p)) == "verified"]
         _s_blocked  = [p for p in _s_detected if p not in _s_content]
 
         claude_prompt = textwrap.dedent(f'''
@@ -2530,9 +2536,9 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         SOCIAL PLATFORM STATE (IMPORTANT - use this for all social reasoning):
         Platforms detected: {_s_detected}
         Platforms with scraped content: {_s_content}
-        Platforms blocked (active but unverified): {_s_blocked}
-        Rule: If a platform is "detected", treat it as ACTIVE even if content is limited.
-        Never say "no social presence" if platforms are detected.
+        Platforms linked but content not read (metadata only or blocked): {_s_blocked}
+        Rule: Never say "no social presence" if platforms are detected.
+        Rule: Only describe social content (formats, video, posting habits, engagement) for platforms whose content was actually read. Profiles that are linked but not read are 'linked, content not verified': do not call them strong, weak, active or inactive, and do not give them platform_scores.
 
         STRUCTURED BOOKING COMPETITOR DATA (real pricing + ratings from Booksy/Fresha/Yelp/StyleSeat):
         {json.dumps(booking_cards[:3], indent=2)}
@@ -2621,7 +2627,9 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         2. Cross-check every claim against the structured signal data
         3. Correct any claims not supported by the data
         4. If Claude was too generous on scores, adjust them down
-        5. Convert everything into the exact SignalScope JSON schema
+        5. Only describe social content (formats, video, posting habits, engagement) for platforms whose content was actually read. Profiles that are linked but not read are 'linked, content not verified': do not call them strong, weak, active or inactive, and do not give them platform_scores.
+           Remove claims about content, video or posting habits on platforms not listed as read.
+        6. Convert everything into the exact SignalScope JSON schema
 
         CLAUDE'S ANALYSIS:
         {claude_output}
@@ -2658,6 +2666,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         prompt = textwrap.dedent(f'''
         You are a senior marketing strategist. Analyze {business_name} ({location}).
         Return ONLY valid JSON - no markdown, no backticks.
+        RULE: Only describe social content (formats, video, posting habits, engagement) for platforms whose content was actually read. Profiles that are linked but not read are 'linked, content not verified': do not call them strong, weak, active or inactive, and do not give them platform_scores.
 
         DATA:
         {json.dumps(raw_data)[:5000]}
@@ -2703,6 +2712,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         - If pricing data exists, compare it to market norms
         - If social platforms are missing, name which ones and why they matter for this niche
         - Set signal_confidence to "Low" if data was thin - be honest
+        - Only describe social content (formats, video, posting habits, engagement) for platforms whose content was actually read. Profiles that are linked but not read are 'linked, content not verified': do not call them strong, weak, active or inactive, and do not give them platform_scores.
 
         Return ONLY valid JSON with these keys:
         company ("{business_name}"), industry, overall_score, key_insight,
@@ -2957,7 +2967,7 @@ def agent():
     # -- FAST RESPONSE - run GPT immediately, return to user -------------------
     try:
         fast_report = run_fast_pipeline(business_name, location, website_pages, social_text, social_links, gp_context=discovery_metadata)
-        fast_report = verify_fast_report(fast_report, social_text, build_data_quality(website_pages, social_text, "", []))
+        fast_report = verify_fast_report(fast_report, social_text, build_data_quality(website_pages, social_text, "", []), social_links)
         fast_report["company"] = business_name
     except Exception as e:
         fast_report = {"company": business_name, "error": str(e), "overall_score": 0}

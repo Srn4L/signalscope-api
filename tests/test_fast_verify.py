@@ -61,3 +61,19 @@ def test_verify_keeps_verified_platform_scores():
 def test_verify_never_raises_on_bad_input():
     assert app.verify_fast_report(None, {}, {}) is None
     assert "verification" in app.verify_fast_report({"platform_scores": "oops"}, None, None)
+
+
+def test_linked_but_unfetched_platform_stays_present():
+    # LinkedIn was linked but returned nothing: blocked is not missing.
+    report = {"platform_scores": {"LinkedIn": 60}, "signal_map_data": {"platforms_present": ["LinkedIn"]}}
+    out = app.verify_fast_report(report, {}, {}, {"linkedin": "https://linkedin.com/x"})
+    assert out["signal_map_data"]["platforms_present"] == ["LinkedIn"]
+    assert out["platform_scores"] == {}
+
+
+def test_deep_live_case_linkedin_blocked_score_removed():
+    social_text = {"facebook": "x" * 400, "instagram": "[INSTAGRAM METADATA]: title: Angel",
+                   "linkedin": "[LINKEDIN PRESENCE DETECTED - content blocked by platform]"}
+    report = {"platform_scores": {"Facebook": 65, "Instagram": 70, "LinkedIn": 60}, "signal_confidence": "High"}
+    out = app.verify_fast_report(report, social_text, {"reviews": {"pct": 100}, "website": {"pct": 75}})
+    assert out["platform_scores"] == {"Facebook": 65}
