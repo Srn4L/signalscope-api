@@ -5855,6 +5855,107 @@ def health_db():
     return jsonify({"ok": False, "error": error}), 503
 
 
+@app.route('/health/providers', methods=['GET'])
+def health_providers():
+    """
+    Owner-only check of every outside API. Uses free account endpoints where
+    the provider has one (SerpAPI, ScraperAPI, OpenAI and Anthropic model
+    lists). Tavily, Google and Geoapify each spend one small call, through the
+    daily caps. Never returns key values.
+    """
+    if get_code_type(request) != "master":
+        return jsonify({"ok": False, "error": "Owner access code required"}), 403
+    import requests as _rq
+
+    def _check(fn):
+        t0 = time.time()
+        try:
+            out = fn()
+        except Exception as e:
+            out = {"ok": False, "detail": f"{type(e).__name__}: {str(e)[:200]}"}
+        out["ms"] = int((time.time() - t0) * 1000)
+        return out
+
+    def _serpapi():
+        if not SERP_API_KEY:
+            return {"configured": False, "ok": False, "detail": "SERP_API_KEY not set"}
+        r = _rq.get("https://serpapi.com/account.json", params={"api_key": SERP_API_KEY}, timeout=15)
+        d = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+        if r.status_code != 200 or d.get("error"):
+            return {"configured": True, "ok": False, "detail": f"HTTP {r.status_code}: {(d.get('error') or r.text)[:200]}"}
+        left = d.get("total_searches_left", d.get("plan_searches_left"))
+        return {"configured": True, "ok": (left or 0) > 0, "plan": d.get("plan_name"),
+                "searches_per_month": d.get("searches_per_month"), "searches_left": left,
+                "detail": "account reachable" if (left or 0) > 0 else "no searches left this month"}
+
+    def _scraperapi():
+        if not SCRAPER_API_KEY:
+            return {"configured": False, "ok": False, "detail": "SCRAPER_API_KEY not set"}
+        r = _rq.get("https://api.scraperapi.com/account", params={"api_key": SCRAPER_API_KEY}, timeout=15)
+        if r.status_code != 200:
+            return {"configured": True, "ok": False, "detail": f"HTTP {r.status_code}: {r.text[:200]}"}
+        d = r.json()
+        used, cap = d.get("requestCount"), d.get("requestLimit")
+        left = (cap - used) if isinstance(used, int) and isinstance(cap, int) else None
+        return {"configured": True, "ok": left is None or left > 0, "requests_used": used,
+                "request_limit": cap, "requests_left": left, "detail": "account reachable"}
+
+    def _tavily():
+        if not TAVILY_API_KEY:
+            return {"configured": False, "ok": False, "detail": "TAVILY_API_KEY not set"}
+        if not api_budget_ok("tavily"):
+            return {"configured": True, "ok": None, "detail": "skipped: daily cap reached or turned off"}
+        r = _rq.post("https://api.tavily.com/search",
+                     json={"api_key": TAVILY_API_KEY, "query": "New York coffee shop", "max_results": 1}, timeout=20)
+        if r.status_code != 200:
+            return {"configured": True, "ok": False, "detail": f"HTTP {r.status_code}: {r.text[:200]}"}
+        n = len((r.json() or {}).get("results", []))
+        return {"configured": True, "ok": n > 0, "detail": f"{n} result(s) returned"}
+
+    def _google():
+        key = os.environ.get("GOOGLE_PLACES_API_KEY", "")
+        if not key:
+            return {"configured": False, "ok": False, "detail": "GOOGLE_PLACES_API_KEY not set"}
+        if not api_budget_ok("google_geocode"):
+            return {"configured": True, "ok": None, "detail": "skipped: daily cap reached or turned off"}
+        d = _rq.get("https://maps.googleapis.com/maps/api/geocode/json",
+                    params={"address": "New York, NY", "key": key}, timeout=15).json()
+        st = d.get("status")
+        return {"configured": True, "ok": st == "OK", "detail": f"status={st} {d.get('error_message', '')[:150]}".strip()}
+
+    def _geoapify():
+        key = os.environ.get("GEOAPIFY_KEY", "")
+        if not key:
+            return {"configured": False, "ok": False, "detail": "GEOAPIFY_KEY not set"}
+        if not api_budget_ok("geoapify"):
+            return {"configured": True, "ok": None, "detail": "skipped: daily cap reached or turned off"}
+        r = _rq.get("https://api.geoapify.com/v1/geocode/search",
+                    params={"text": "New York, NY", "apiKey": key, "limit": 1}, timeout=15)
+        n = len((r.json() or {}).get("features", [])) if r.status_code == 200 else 0
+        return {"configured": True, "ok": n > 0, "detail": f"HTTP {r.status_code}, {n} result(s)"}
+
+    def _openai():
+        if not gpt_client:
+            return {"configured": False, "ok": False, "detail": "OpenAI client not configured"}
+        ids = {m.id for m in gpt_client.models.list()}
+        return {"configured": True, "ok": "gpt-4o" in ids, "detail": "gpt-4o available" if "gpt-4o" in ids else "gpt-4o not in model list"}
+
+    def _anthropic():
+        if not claude_client:
+            return {"configured": False, "ok": False, "detail": "Anthropic client not configured"}
+        m = claude_client.models.retrieve(CLAUDE_MODEL)
+        return {"configured": True, "ok": True, "detail": f"{getattr(m, 'id', CLAUDE_MODEL)} available"}
+
+    providers = {
+        "google_places": _check(_google), "geoapify": _check(_geoapify), "tavily": _check(_tavily),
+        "serpapi": _check(_serpapi), "scraperapi": _check(_scraperapi),
+        "openai": _check(_openai), "anthropic": _check(_anthropic),
+    }
+    for name, res in providers.items():
+        print(f"  [Providers] {name}: ok={res.get('ok')} {res.get('detail', '')}", flush=True)
+    return jsonify({"ok": True, "providers": providers, "caps": API_CALL_LIMITS})
+
+
 @app.route('/init-db', methods=['POST'])
 def init_db_route():
     '''
