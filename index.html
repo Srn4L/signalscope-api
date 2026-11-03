@@ -7,11 +7,11 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
 <meta name="theme-color" content="#2B1A12"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"/>
-<title>Yelhao — Business Discovery & Intelligence</title>
+<title>yelhao — Business Discovery & Intelligence</title>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700;14..32,800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
-/* Yelhao visual identity: Cocoa & Cream (chocolate, cream, yolk yellow).
+/* yelhao visual identity: Cocoa & Cream (chocolate, cream, yolk yellow).
    --accent is for text, borders and indicators; --accent-fill is for filled
    buttons, bars and badges; --on-accent is the text color on a fill. */
 :root{
@@ -1554,6 +1554,10 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
   .rs-find{padding:16px;grid-template-columns:26px minmax(0,1fr);}
   .rs-find .lab{grid-column:2;justify-self:start;}
   .ws-head{flex-direction:column;align-items:flex-start;}
+  .scout-lens-override{display:flex;flex-wrap:wrap;max-width:100%;}
+  .scout-lens-opt{padding:8px 10px;}
+  .scout-lens-opt:not(:last-child){border-right:none;}
+  .wrap,body{overflow-x:hidden;}
   #workspaceView .tabs{width:100%;}
   #workspaceView .tab{flex:1;padding:10px 8px;text-align:center;}
 }
@@ -1608,7 +1612,7 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
 <!-- HEADER -->
 <div class="header">
   <div class="header-left">
-    <a class="logo" href="#/" aria-label="Yelhao home">
+    <a class="logo" href="#/" aria-label="yelhao home">
       <div class="logo-mark">y</div>
       <div class="logo-text"><span>y</span>elha<span>o</span></div>
     </a>
@@ -1634,7 +1638,7 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
   <section class="yh-band dc-band">
     <p class="yh-eyebrow" id="dcDate"></p>
     <h1 class="dc-title">Discover local opportunities</h1>
-    <p class="dc-dek">Yelhao reads public signals like reviews, websites, socials and booking pages, then ranks local businesses by opportunity and explains every score.</p>
+    <p class="dc-dek">yelhao reads public signals like reviews, websites, socials and booking pages, then ranks local businesses by opportunity and explains every score.</p>
     <form class="dc-search" onsubmit="yhSearch(event)" role="search">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6B5A4E" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>
       <input id="dcSearch" type="search" placeholder="Try: nail salons in Astoria with weak marketing" aria-label="Describe the businesses you are looking for"/>
@@ -1646,9 +1650,9 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
       <div id="dcFeatured"></div>
       <section id="dcFreshSec" hidden><div class="dc-h2row"><h2 class="yh-h2">Fresh discoveries</h2></div><div class="dc-cards" id="dcFresh"></div></section>
       <section>
-        <div class="dc-h2row"><h2 class="yh-h2">How Yelhao works</h2></div>
+        <div class="dc-h2row"><h2 class="yh-h2">How yelhao works</h2></div>
         <div class="dc-steps">
-          <a class="yh-card dc-step" href="#/scout" style="text-decoration:none"><span class="dc-step-n">1</span><span class="dc-step-t">Scout</span><span class="dc-step-d">Describe the businesses you want. Yelhao finds them and ranks them by Demand, Gap and Conversion.</span></a>
+          <a class="yh-card dc-step" href="#/scout" style="text-decoration:none"><span class="dc-step-n">1</span><span class="dc-step-t">Scout</span><span class="dc-step-d">Describe the businesses you want. yelhao finds them and ranks them by Demand, Gap and Conversion.</span></a>
           <a class="yh-card dc-step" href="#/analyze" style="text-decoration:none"><span class="dc-step-n">2</span><span class="dc-step-t">Analyze</span><span class="dc-step-d">Get an evidence-based report on one business, with every claim labeled.</span></a>
           <a class="yh-card dc-step" href="#/networks" style="text-decoration:none"><span class="dc-step-n">3</span><span class="dc-step-t">Networks</span><span class="dc-step-d">Save the ones worth acting on, then export or sync them to your CRM.</span></a>
         </div>
@@ -1683,7 +1687,7 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
   <div class="hero-tag"><div class="hero-dot"></div>Signal Intelligence · Business Discovery</div>
   <h1>Find businesses.<br><em>Rank by opportunity.</em></h1>
   <p class="hero-sub">Scout any niche. Analyze any target. Save the ones worth acting on.</p>
-  <p class="hero-desc">YelhaO reads public signals — websites, socials, booking platforms, reviews — and ranks businesses by opportunity. Every score is mode-aware and explainable. Every insight points to a clear next action.</p>
+  <p class="hero-desc">yelhao reads public signals — websites, socials, booking platforms, reviews — and ranks businesses by opportunity. Every score is mode-aware and explainable. Every insight points to a clear next action.</p>
 
   <div class="workflow-strip">
     <div class="wf-step"><div class="wf-node wf-scout" data-wftab="scout"><span class="wf-icon">🔍</span><div><div class="wf-label">Scout</div><div class="wf-sub">Niche + location</div></div></div></div>
@@ -2035,7 +2039,7 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
 <!-- PROSPECT PANEL -->
 <div class="scout-panel on" id="scoutPanel">
   <div class="section-label" style="margin-bottom:20px;">Scout</div>
-  <p class="scout-intro">Describe what you're looking for — YelhaO picks the scoring lens, ranks businesses by Demand, Gap, and Conversion, and explains every score.</p>
+  <p class="scout-intro">Describe what you're looking for — yelhao picks the scoring lens, ranks businesses by Demand, Gap, and Conversion, and explains every score.</p>
 
   <!-- Goal input — primary search -->
   <div class="scout-goal-field">
@@ -2167,7 +2171,7 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
     <button class="conn-badge" onclick="openConnectorModal('airtable')" style="cursor:pointer;text-align:left;"><div class="conn-dot purple"></div><span class="conn-icon">🟣</span><div><div class="conn-name">Airtable</div><div class="conn-type">Intelligence DB · Env-based</div></div></button>
     <button class="conn-badge" onclick="exportNetworksCSV()" style="cursor:pointer;text-align:left;"><div class="conn-dot muted"></div><span class="conn-icon">📄</span><div><div class="conn-name">CSV</div><div class="conn-type">Universal export · Always available</div></div></button>
   </div>
-  <p class="conn-disclaimer">Your API key is used only for the sync request and is never stored by YelhaO.</p>
+  <p class="conn-disclaimer">Your API key is used only for the sync request and is never stored by yelhao.</p>
 
   <!-- Batch / CSV Import Section -->
   <div class="batch-section" id="batchSection">
@@ -2176,7 +2180,7 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
       <input type="file" id="batchFileInput" accept=".csv" onchange="handleBatchFile(this.files[0])"/>
       <div class="batch-drop-label">
         <strong>Click to upload a CSV</strong> — or drag and drop<br/>
-        Export from HubSpot, Salesforce, or any CRM. Yelhao auto-detects columns.
+        Export from HubSpot, Salesforce, or any CRM. yelhao auto-detects columns.
       </div>
     </div>
     <!-- Column mapping (shown after upload) -->
@@ -2283,7 +2287,7 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
   </section>
   <section class="yh-card ws-box">
     <h3>Daily limits</h3>
-    <p>Searches and deep analyses have a daily limit per visitor. Limits reset every day and keep Yelhao free to run.</p>
+    <p>Searches and deep analyses have a daily limit per visitor. Limits reset every day and keep yelhao free to run.</p>
   </section>
   <div class="ws-note"><b>Also in Workspace:</b> CRM sync, Airtable and CSV export live under Networks.</div>
 </aside>
@@ -2307,7 +2311,7 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
     <div class="modal-sub" id="connModalBody"></div>
     <div id="connModalApiRow" style="display:none;margin-bottom:14px;">
       <input class="modal-input" type="password" id="connApiKey" placeholder="Paste your API key here" autocomplete="off"/>
-      <div style="font-size:9px;color:var(--muted);opacity:.7;margin-top:6px;letter-spacing:.03em;">Your key is sent directly in the sync request and never stored by YelhaO.</div>
+      <div style="font-size:9px;color:var(--muted);opacity:.7;margin-top:6px;letter-spacing:.03em;">Your key is sent directly in the sync request and never stored by yelhao.</div>
     </div>
     <button class="modal-btn" id="connModalAction" onclick="runConnectorAction()">Sync to CRM →</button>
     <span class="modal-cancel" onclick="$('connectorModal').classList.remove('open')">Close</span>
@@ -3147,7 +3151,7 @@ function analyze() {
 
   if (!hasWebsite && !hasSocials && !hasIdentity) {
     if (name && !location) {
-      return showErr('Add a location, website, or social profile so Yelhao can find reliable public signals.');
+      return showErr('Add a location, website, or social profile so yelhao can find reliable public signals.');
     }
     return showErr('Provide at least one: website URL, social profile, or business name + location');
   }
@@ -3851,7 +3855,7 @@ function resetForm() {
 
 function downloadReport() {
   const getList = id => Array.from(document.querySelectorAll(`#${id} .list-item`)).map(l => '• ' + l.querySelector('div:last-child')?.textContent).filter(Boolean).join('\n');
-  const text = `# Yelhao Report\n\nCompany: ${$('rCompany').textContent}\nGenerated: ${new Date().toLocaleDateString()}\n\nKey Insight:\n${$('rInsight').textContent}\n\nOverview:\n${$('rOverview').textContent}\n\nSocial Strategy:\n${$('rStrategy').textContent}\n\nStrengths:\n${getList('rStrengths')}\n\nWeaknesses:\n${getList('rWeaknesses')}\n\nCover Letter Snippet:\n${$('rSnippet').textContent}`;
+  const text = `# yelhao Report\n\nCompany: ${$('rCompany').textContent}\nGenerated: ${new Date().toLocaleDateString()}\n\nKey Insight:\n${$('rInsight').textContent}\n\nOverview:\n${$('rOverview').textContent}\n\nSocial Strategy:\n${$('rStrategy').textContent}\n\nStrengths:\n${getList('rStrengths')}\n\nWeaknesses:\n${getList('rWeaknesses')}\n\nCover Letter Snippet:\n${$('rSnippet').textContent}`;
   const blob = new Blob([text], { type: 'text/plain' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'yelhao-report.txt'; a.click();
 }
@@ -4311,7 +4315,7 @@ document.addEventListener('DOMContentLoaded', () => {
 const prospectSteps = [
   'Scanning booking platforms...',
   'Pulling Booksy, Fresha, Vagaro...',
-  'Running Yelhao signal analysis...',
+  'Running yelhao signal analysis...',
   'Scoring leads by opportunity...',
   'Building results...'
 ];
@@ -5210,19 +5214,19 @@ function getReportScore(report) {
 const CONNECTOR_INFO = {
   hubspot: {
     icon: '🟠', title: 'HubSpot — CRM Sync',
-    body: 'YelhaO can push analyzed businesses as contacts, deals, and notes directly to HubSpot. Paste your Private App API key below.',
+    body: 'yelhao can push analyzed businesses as contacts, deals, and notes directly to HubSpot. Paste your Private App API key below.',
     showKey: true,
     actionLabel: 'Sync to HubSpot →',
   },
   salesforce: {
     icon: '☁️', title: 'Salesforce — CRM Sync',
-    body: 'YelhaO can create leads and log follow-up tasks in Salesforce. This connector uses backend environment credentials configured at deploy time. No additional key needed here.',
+    body: 'yelhao can create leads and log follow-up tasks in Salesforce. This connector uses backend environment credentials configured at deploy time. No additional key needed here.',
     showKey: false,
     actionLabel: 'Trigger Salesforce Sync →',
   },
   airtable: {
     icon: '🟣', title: 'Airtable — Intelligence Database',
-    body: 'YelhaO can save analyzed businesses, scores, weaknesses, and outreach context to Airtable. This connector uses backend environment credentials. No additional key needed here.',
+    body: 'yelhao can save analyzed businesses, scores, weaknesses, and outreach context to Airtable. This connector uses backend environment credentials. No additional key needed here.',
     showKey: false,
     actionLabel: 'Sync to Airtable →',
   },
@@ -5996,7 +6000,7 @@ function cleanProblemText(raw) {
     document.body.dataset.view = 'research';
     setNav('discover');
     renderResearch(item);
-    document.title = item.name + ' | Yelhao research';
+    document.title = item.name + ' | yelhao research';
   }
   function showWorkspace(tab) {
     document.body.dataset.view = 'workspace';
@@ -6007,7 +6011,7 @@ function cleanProblemText(raw) {
   }
   function route() {
     const h = location.hash.replace(/^#\/?/, '');
-    if (!h.startsWith('r/')) document.title = 'Yelhao | Local business research';
+    if (!h.startsWith('r/')) document.title = 'yelhao | Local business research';
     if (h.startsWith('r/')) showResearch(h.slice(2));
     else if (WS_TABS.includes(h)) showWorkspace(h);
     else showDiscover();
