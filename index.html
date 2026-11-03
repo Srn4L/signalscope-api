@@ -3290,6 +3290,11 @@ async function runAnalysis() {
 function render(r, noSave) {
   const _sampleTag = $('rSampleTag');
   if (_sampleTag && r !== DEMO_REPORT) _sampleTag.remove();
+  // Start each report clean: sections below only show when this report has
+  // data for them, so hide anything left over from the previous report.
+  ['insightBox','methodologyCard','reviewCard','platformScorecardCard','reasonToggle',
+   'rSignalConfidence','rScoreConfidence'].forEach(id => { const el = $(id); if (el) el.style.display = 'none'; });
+  const _psc = $('platformScorecard'); if (_psc) _psc.innerHTML = '';
   $('loader').classList.remove('on');
   $('report').classList.add('on');
 
