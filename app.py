@@ -5869,21 +5869,32 @@ def query_type_terms(niche, raw_query=""):
     return found
 
 
-def _place_types(c):
-    """Types a place is tagged as, from OpenStreetMap tags and Geoapify categories."""
+def _place_type_evidence(c):
+    """
+    Types a place is listed as, each with the exact evidence:
+    {"nail": "OpenStreetMap beauty=nails", "hair": "Geoapify category service.beauty.hairdresser"}.
+    An OpenStreetMap tag is preferred over a Geoapify category for the same type.
+    """
     tags = c.get("osm_tags") or {}
-    cat_ends = {str(x).rsplit(".", 1)[-1] for x in (c.get("geo_categories") or [])}
-    found = set()
+    cats = [str(x) for x in (c.get("geo_categories") or [])]
+    found = {}
     for t, rules in _TYPE_TAG_VALUES.items():
         for field, values in rules.items():
             if field == "category":
-                if cat_ends & set(values):
-                    found.add(t)
+                hit = next((x for x in cats if x.rsplit(".", 1)[-1] in values), None)
+                if hit and t not in found:
+                    found[t] = f"Geoapify category {hit}"
             else:
-                tag_vals = {v.strip() for v in str(tags.get(field, "")).lower().split(";")}
-                if tag_vals & set(values):
-                    found.add(t)
+                tag_vals = [v.strip() for v in str(tags.get(field, "")).lower().split(";")]
+                hit = next((v for v in tag_vals if v in values), None)
+                if hit:
+                    found[t] = f"OpenStreetMap {field}={hit}"
     return found
+
+
+def _place_types(c):
+    """Types a place is listed as, from OpenStreetMap tags and Geoapify categories."""
+    return set(_place_type_evidence(c))
 
 
 def geoapify_query_match(candidate, terms):
@@ -5897,11 +5908,13 @@ def geoapify_query_match(candidate, terms):
     if not terms:
         return {"level": "unknown", "terms": [], "reason": ""}
     name_words = set(_words(candidate.get("business_name")))
-    place_types = _place_types(candidate)
+    evidence = _place_type_evidence(candidate)
+    place_types = set(evidence)
     tag_hits = sorted(terms & place_types)
     if tag_hits:
         return {"level": "tag", "terms": tag_hits,
-                "reason": f"Listed as {', '.join(tag_hits)} on OpenStreetMap, matching your search"}
+                "reason": f"Listed as {', '.join(tag_hits)} ({'; '.join(evidence[t] for t in tag_hits)}), "
+                          "matching your search"}
     name_hits = sorted(t for t in terms if name_words & set(QUERY_TYPE_TERMS[t]))
     if name_hits:
         return {"level": "name", "terms": name_hits,
@@ -5909,7 +5922,8 @@ def geoapify_query_match(candidate, terms):
     other = sorted(place_types - terms)
     if other:
         return {"level": "other_type", "terms": other,
-                "reason": f"Listed as {', '.join(other)} on OpenStreetMap, not {', '.join(sorted(terms))}"}
+                "reason": f"Listed as {', '.join(other)} ({'; '.join(evidence[t] for t in other)}), "
+                          f"not {', '.join(sorted(terms))}"}
     return {"level": "unknown", "terms": [],
             "reason": "Type not confirmed: listed only under a broad category"}
 
