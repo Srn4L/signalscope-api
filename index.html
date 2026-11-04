@@ -1440,6 +1440,14 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
 .dc-step-n{font-family:var(--font-display);font-size:28px;font-weight:700;color:var(--accent);line-height:1;}
 .dc-step-t{font-size:17px;font-weight:700;color:var(--heading);}
 .dc-step-d{font-size:14px;line-height:1.55;color:var(--muted);}
+.dc-intents{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;}
+.dc-intent{padding:22px;display:flex;flex-direction:column;gap:10px;}
+.dc-intent-t{font-family:var(--font-display);font-size:21px;font-weight:600;color:var(--heading);margin:0;}
+.dc-intent-d{font-size:14.5px;line-height:1.55;color:var(--muted);margin:0;}
+.dc-tries{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;}
+.dc-try{text-align:left;padding:8px 12px;border-radius:999px;border:1px solid var(--border2);background:var(--card2);color:var(--text);font:500 13.5px var(--font-head);cursor:pointer;line-height:1.3;}
+.dc-try:hover{border-color:var(--accent-fill);background:var(--accent-dim);}
+.dc-intent-note{font-size:13px;color:var(--muted);margin:12px 0 0;}
 .dc-rank{padding:22px 24px 8px;}
 .dc-rank-row{display:grid;grid-template-columns:28px minmax(0,1fr) 44px;gap:12px;align-items:center;padding:13px 0;border-top:1px solid var(--border);text-decoration:none;color:var(--text);cursor:pointer;}
 .dc-cta{padding:28px;border-radius:24px;background:var(--accent-fill);color:#2B1A12;display:flex;flex-direction:column;gap:12px;}
@@ -1553,7 +1561,7 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
   .dc-feature-score{flex-direction:row;align-items:center;padding:18px 22px;gap:16px;}
   .dc-feature-score .dc-meters{display:none;}
   .dc-ball{width:64px;height:64px;font-size:28px;}
-  .dc-cards,.dc-steps,.rs-plays{grid-template-columns:minmax(0,1fr);}
+  .dc-cards,.dc-steps,.rs-plays,.dc-intents{grid-template-columns:minmax(0,1fr);}
   .rs-band{padding:20px 0 26px;}
   .rs-score{padding:20px;}
   .rs-ring{width:100px;height:100px;}
@@ -1664,12 +1672,30 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
       <div id="dcFeatured"></div>
       <section id="dcFreshSec" hidden><div class="dc-h2row"><h2 class="yh-h2">Fresh discoveries</h2></div><div class="dc-cards" id="dcFresh"></div></section>
       <section>
-        <div class="dc-h2row"><h2 class="yh-h2">How yelhao works</h2></div>
-        <div class="dc-steps">
-          <a class="yh-card dc-step" href="#/scout" style="text-decoration:none"><span class="dc-step-n">1</span><span class="dc-step-t">Scout</span><span class="dc-step-d">Describe what you are looking for. yelhao finds businesses and ranks them by how well they fit, with the reasons.</span></a>
-          <a class="yh-card dc-step" href="#/analyze" style="text-decoration:none"><span class="dc-step-n">2</span><span class="dc-step-t">Analyze</span><span class="dc-step-d">Get an evidence-based report on one business, with every claim labeled.</span></a>
-          <a class="yh-card dc-step" href="#/networks" style="text-decoration:none"><span class="dc-step-n">3</span><span class="dc-step-t">Networks</span><span class="dc-step-d">Save the ones worth acting on, then export or sync them to your CRM.</span></a>
+        <div class="dc-h2row"><h2 class="yh-h2">What are you looking to do?</h2></div>
+        <div class="dc-intents">
+          <div class="yh-card dc-intent" data-intent="feature">
+            <h3 class="dc-intent-t">Worth featuring</h3>
+            <p class="dc-intent-d">Under-discovered places with strong reviews, new openings, and spots your feed will never show you.</p>
+            <div class="dc-tries"><button type="button" class="dc-try" data-intent="feature" data-goal="Hidden gem restaurants in the Bronx" onclick="yhTry(this)">Hidden gem restaurants in the Bronx</button><button type="button" class="dc-try" data-intent="feature" data-goal="Underrated bakeries in Queens" onclick="yhTry(this)">Underrated bakeries in Queens</button><button type="button" class="dc-try" data-intent="feature" data-goal="Just opened cafes in Harlem" onclick="yhTry(this)">Just opened cafes in Harlem</button></div>
+          </div>
+          <div class="yh-card dc-intent" data-intent="outreach">
+            <h3 class="dc-intent-t">Find clients</h3>
+            <p class="dc-intent-d">Businesses with real demand and a visible gap you could help with, from branding to booking.</p>
+            <div class="dc-tries"><button type="button" class="dc-try" data-intent="outreach" data-goal="Salons in Brooklyn that need better branding" onclick="yhTry(this)">Salons in Brooklyn that need better branding</button><button type="button" class="dc-try" data-intent="outreach" data-goal="Restaurants in the Bronx with no website" onclick="yhTry(this)">Restaurants in the Bronx with no website</button><button type="button" class="dc-try" data-intent="outreach" data-goal="Barbershops in Queens with weak Instagram" onclick="yhTry(this)">Barbershops in Queens with weak Instagram</button></div>
+          </div>
+          <div class="yh-card dc-intent" data-intent="partnership">
+            <h3 class="dc-intent-t">Partners</h3>
+            <p class="dc-intent-d">Nearby businesses that fit a collab, a pop-up or a joint event.</p>
+            <div class="dc-tries"><button type="button" class="dc-try" data-intent="partnership" data-goal="Cafes in Brooklyn to collab with on a pop-up" onclick="yhTry(this)">Cafes in Brooklyn to collab with on a pop-up</button><button type="button" class="dc-try" data-intent="partnership" data-goal="Boutiques in SoHo for a joint event" onclick="yhTry(this)">Boutiques in SoHo for a joint event</button><button type="button" class="dc-try" data-intent="partnership" data-goal="Gyms in Astoria to partner with" onclick="yhTry(this)">Gyms in Astoria to partner with</button></div>
+          </div>
+          <div class="yh-card dc-intent" data-intent="market">
+            <h3 class="dc-intent-t">Know your market</h3>
+            <p class="dc-intent-d">See who you're up against nearby and where you stand.</p>
+            <div class="dc-tries"><button type="button" class="dc-try" data-intent="market" data-goal="Compare nail salons in Astoria" onclick="yhTry(this)">Compare nail salons in Astoria</button><button type="button" class="dc-try" data-intent="market" data-goal="Competitor landscape for med spas in Manhattan" onclick="yhTry(this)">Competitor landscape for med spas in Manhattan</button><button type="button" class="dc-try" data-intent="market" data-goal="Compare bakeries in Bushwick" onclick="yhTry(this)">Compare bakeries in Bushwick</button></div>
+          </div>
         </div>
+        <p class="dc-intent-note">Tap an example to set up a Scout search. Nothing runs until you press Run Scout.</p>
       </section>
     </div>
     <aside class="dc-aside">
@@ -6057,6 +6083,19 @@ function cleanProblemText(raw) {
       g.focus();
       g.scrollIntoView({ block: 'center' });
     }, 30);
+  };
+  window.yhTry = function (btn) {
+    const goal = btn.dataset.goal || '';
+    location.hash = '#/scout';
+    setTimeout(() => {
+      const g = document.getElementById('scoutGoal');
+      if (!g) return;
+      if (typeof resetLensAuto === 'function') { try { resetLensAuto(); } catch (e) {} }
+      g.value = goal;
+      g.dispatchEvent(new Event('input', { bubbles: true }));
+      g.scrollIntoView({ block: 'center' });
+      g.focus();
+    }, 40);
   };
   window.yhOpenDemo = function () {
     location.hash = '#/analyze';
