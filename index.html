@@ -4743,8 +4743,9 @@ async function runProspect(niche, location, mode, goal, _inferred) {
     }
 
     const data = await res.json();
-    if (res.status === 409 && data.replay_missing) {
+    if (res.status === 409 && (data.replay_missing || data.replay_refused)) {
       // Owner "saved data only" run: nothing was sent live; show what's missing
+      // or why saved mode couldn't be used
       errBox.textContent = data.error;
       errBox.classList.add('on');
       return;

@@ -294,10 +294,51 @@ def _replay_report(response):
     return response
 
 
+# Routes that always call providers live; they can never honor saved-only replay.
+_ALWAYS_LIVE_PREFIXES = ("/health", "/dev/search/compare")
+
+
+def _saved_replay_refusal():
+    """
+    A request that explicitly asks for X-Replay: saved must never reach a
+    provider unless saved mode can actually be honored. Returns a reason code
+    when it can't, else None. Requests without that header are unaffected.
+    """
+    if (request.headers.get("X-Replay") or "").strip().lower() != "saved":
+        return None
+    if request.method == "OPTIONS":
+        return None                                   # CORS preflight carries no work
+    if any(request.path.startswith(p) for p in _ALWAYS_LIVE_PREFIXES):
+        return "always_live_route"
+    if replay_service is None or not replay_service.REPLAY_ON:
+        return "replay_not_enabled"
+    if get_code_type(request) != "master":
+        return "owner_code_required"
+    return None
+
+
+_SAVED_REFUSAL_TEXT = {
+    "always_live_route":   "this route always calls providers live",
+    "replay_not_enabled":  "replay is not enabled on the server (YELHAO_DEV_REPLAY)",
+    "owner_code_required": "saved replay needs the owner access code",
+}
+
+
 @app.before_request
 def _set_replay_mode():
     # Every request gets a mode, so a reused worker thread never keeps the
     # previous request's choice. Only the owner code can turn replay on.
+    reason = _saved_replay_refusal()
+    if reason:
+        if replay_service is not None:
+            replay_service.set_request_mode("off")
+        print(f"[Replay] refused saved-only request {request.method} {request.path}: {reason}", flush=True)
+        return jsonify({
+            "ok": False,
+            "error": ("Saved-data-only replay can't be honored: " + _SAVED_REFUSAL_TEXT[reason]
+                      + ". Nothing was started or sent."),
+            "replay_refused": reason,
+        }), 409
     if replay_service is None:
         return
     try:
