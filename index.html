@@ -3204,6 +3204,7 @@ function analyze() {
 }
 
 async function runAnalysis() {
+  _pendingAnalysis = null;
   // Clear any existing poll from a previous run
   if (_pollInterval) {
     clearInterval(_pollInterval);
@@ -3268,6 +3269,16 @@ async function runAnalysis() {
     }
 
     const data = await res.json();
+
+    // One analysis: the backend is still running the full report. Keep the
+    // loader up (it shows live steps) and render once when it's done.
+    if (data.job_id && data.status === 'processing' && data.report && data.report.analysis_pending) {
+      _currentJobId = data.job_id;
+      _pendingAnalysis = { siteUrl, mode: payload.objective_mode || null };
+      pollDeepAnalysis(data.job_id);
+      return;
+    }
+
     stopPipelineAnimation();
     $('loader').classList.remove('on');
 
@@ -3293,29 +3304,8 @@ async function runAnalysis() {
 
     render(report);
 
-    // Save to session Networks state
-    // Read score AFTER render() — render() has just set rScore from all field aliases
-    try {
-      const bizName = $('businessName')?.value.trim() || report.company || '';
-      const niche   = $('industry')?.value.trim()     || report.industry || '';
-      // Prefer DOM value (render just set it) — most reliable single source of truth
-      const domScore = parseInt($('rScore')?.textContent, 10) || 0;
-      const savedScore = domScore > 0 ? domScore : getReportScore(report);
-      if (bizName) {
-        addToNetworks({
-          business_name:       bizName,
-          niche:               niche,
-          location:            $('location')?.value.trim() || report.location || '',
-          website:             siteUrl,
-          opportunity_score:   savedScore,
-          mode:                payload.objective_mode || null,
-          status:              'New',
-          top_signal:          report.top_signal        || null,
-          opportunity_summary: report.opportunity_summary || null,
-          business_metrics:    report.business_metrics  || report.metrics || null,
-        });
-      }
-    } catch(e) {}
+    // Save to session Networks state (read score AFTER render())
+    saveReportToNetworks(report, siteUrl, payload.objective_mode || null);
 
     if (jobId && data.status === 'processing') {
       pollDeepAnalysis(jobId);
@@ -3882,6 +3872,7 @@ function copySnippet() {
 }
 
 function resetForm() {
+  _pendingAnalysis = null;
   if (_pollInterval) { clearInterval(_pollInterval); _pollInterval = null; }
   hideDeepLoadingBanner();
   $('formArea').style.display = 'block';
@@ -4022,6 +4013,41 @@ function renderTrendCards(trends) {
 // ── DEEP ANALYSIS POLLING ──────────────────────────────────────────────────
 let _pollInterval = null;
 let _currentJobId = null;
+// Set while a single analysis is running with no report on screen yet.
+let _pendingAnalysis = null;
+
+function saveReportToNetworks(report, siteUrl, mode) {
+  try {
+    const bizName = $('businessName')?.value.trim() || report.company || '';
+    const niche   = $('industry')?.value.trim()     || report.industry || '';
+    // Prefer DOM value (render just set it), the most reliable single source
+    const domScore = parseInt($('rScore')?.textContent, 10) || 0;
+    const savedScore = domScore > 0 ? domScore : getReportScore(report);
+    if (bizName) {
+      addToNetworks({
+        business_name:       bizName,
+        niche:               niche,
+        location:            $('location')?.value.trim() || report.location || '',
+        website:             siteUrl,
+        opportunity_score:   savedScore,
+        mode:                mode,
+        status:              'New',
+        top_signal:          report.top_signal        || null,
+        opportunity_summary: report.opportunity_summary || null,
+        business_metrics:    report.business_metrics  || report.metrics || null,
+      });
+    }
+  } catch(e) {}
+}
+
+function failPendingAnalysis(msg) {
+  _pendingAnalysis = null;
+  stopPipelineAnimation();
+  $('loader').classList.remove('on');
+  $('formArea').style.display = 'block';
+  $('analyzeBtn').disabled = false;
+  showErr(msg);
+}
 
 function showDeepLoadingBanner() {
   let banner = $('deepBanner');
@@ -4120,13 +4146,17 @@ function showDeepUnavailable() {
 }
 function pollDeepAnalysis(jobId) {
   let attempts = 0;
-  const maxAttempts = 150; // 300 seconds max polling (2s intervals)
+  const maxAttempts = 300; // 10 minutes max polling (2s intervals)
 
   _pollInterval = setInterval(async () => {
     attempts++;
     if (attempts > maxAttempts) {
       clearInterval(_pollInterval);
-      showDeepUnavailable();
+      if (_pendingAnalysis) {
+        failPendingAnalysis('The analysis is taking longer than 10 minutes. Try again in a moment.');
+      } else {
+        showDeepUnavailable();
+      }
       return;
     }
 
@@ -4144,6 +4174,12 @@ function pollDeepAnalysis(jobId) {
 
       // Update live step text while running
       if (data.status === 'running' && data.step) {
+        if (_pendingAnalysis) {
+          // Real step from the backend replaces the timed placeholder steps
+          clearTimeout(pipelineTimer);
+          const subEl = $('loaderSub');
+          if (subEl) subEl.textContent = 'Full analysis in progress';
+        }
         const stepEl = $('loaderStep');
         if (stepEl) stepEl.textContent = data.step;
         const deepStep = document.getElementById('deepStatusStep');
@@ -4156,11 +4192,26 @@ function pollDeepAnalysis(jobId) {
         hideDeepStatusBanner();
 
         const { report, agent_brain } = data.result;
+        const pending = _pendingAnalysis;
+        if (pending) {
+          _pendingAnalysis = null;
+          stopPipelineAnimation();
+          $('loader').classList.remove('on');
+          $('analyzeBtn').disabled = false;
+          if (agent_brain?.data_quality) renderSourcesPanel(report, agent_brain.data_quality);
+          hideDeepStatusBanner();  // renderSourcesPanel turns it on; nothing is pending now
+        }
         if (agent_brain) renderAgentBrain(agent_brain);
         if (agent_brain?.data_quality) renderHeatmap(agent_brain.data_quality);
         if (agent_brain?.booking_competitors?.length) renderBookingCards(agent_brain.booking_competitors);
         if (agent_brain?.trend_intelligence) renderTrends(agent_brain.trend_intelligence);
 
+        if (pending) {
+          // One analysis: first and only render, then save once
+          render(report);
+          saveReportToNetworks(report, pending.siteUrl, pending.mode);
+          return;
+        }
         // Re-render report with full data (noSave=true — already saved)
         render(report, true);
         // Update Networks score with the now-complete deep analysis score
@@ -4178,6 +4229,11 @@ function pollDeepAnalysis(jobId) {
 
       } else if (data.status === 'error') {
         clearInterval(_pollInterval);
+        if (_pendingAnalysis) {
+          failPendingAnalysis('The analysis could not finish. Try again in a moment.');
+          console.warn('Deep analysis error:', data.error);
+          return;
+        }
         showDeepUnavailable();
         console.warn('Deep analysis error:', data.error);
       }
@@ -4867,7 +4923,7 @@ function renderScoutResults(data) {
       <div class="scout-card-footer">
         ${biz.website
           ? `<a class="btn-view-site" href="${esc(biz.website)}" target="_blank" rel="noopener">View site ↗</a>`
-          : `<span class="scout-card-no-site">${isInferred ? 'Website not verified' : 'No website detected'}</span>`}
+          : `<span class="scout-card-no-site">${biz.website_checked === false ? 'Website not checked' : (biz.website_fact ? esc(biz.website_fact) : (isInferred ? 'Website not verified' : 'No website detected'))}</span>`}
         <div class="scout-card-actions">
           <button class="preview-signals-btn" id="prevBtn_${idx}" type="button" onclick="previewSignalsForCard(this, ${idx}, ${JSON.stringify({
             name: biz.business_name,
@@ -4879,6 +4935,9 @@ function renderScoutResults(data) {
             google_rating: biz.google_rating || biz.rating,
             google_review_count: biz.google_review_count || biz.review_count,
             instagram_url: null,
+            website_checked: biz.website_checked,
+            social_checked: biz.social_checked,
+            booking_checked: biz.booking_checked,
           }).replace(/"/g,'&quot;')}, ${JSON.stringify({
             mode: mode,
             user_role: null,
