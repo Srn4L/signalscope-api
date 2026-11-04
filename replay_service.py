@@ -117,7 +117,7 @@ class RunState:
         with self.lock:
             if (kind, what) not in self._seen_missing:
                 self._seen_missing.add((kind, what))
-                self.missing.append({"kind": kind, "what": what[:200]})
+                self.missing.append({"kind": kind, "what": what[:300]})
 
     def summary(self) -> dict:
         with self.lock:
@@ -345,6 +345,16 @@ def _target(url: str) -> str:
     return (p.hostname or "") + (p.path or "")
 
 
+def _describe(url: str, params=None) -> str:
+    """Host, path and non-secret parameters, so each missing call is distinct."""
+    p = urlparse(_clean_url(url))
+    q = dict(parse_qsl(p.query))
+    if isinstance(params, dict):
+        q.update({k: v for k, v in _strip_secrets(params).items() if v is not None})
+    qs = "&".join(f"{k}={str(v)[:60]}" for k, v in sorted(q.items()))
+    return (p.hostname or "") + (p.path or "") + (("?" + qs) if qs else "")
+
+
 def _build_response(saved: dict, url: str):
     import requests
     from requests.structures import CaseInsensitiveDict
@@ -404,7 +414,7 @@ def install_http_replay():
             saved = get(key) if key else None
             if saved is None:
                 why = "" if can_save else " (this kind of call is never saved)"
-                _note_missing("http", f"{m} {_target(url)}{why}")
+                _note_missing("http", f"{m} {_describe(url, params)}{why}")
                 raise HTTPMiss(f"saved data missing: {m} {_target(url)}")
             _note_replayed()
             return _replay_saved(saved, url)
@@ -509,6 +519,40 @@ def _wrap(resource, kind, model_type):
 
     create._yelhao_replay = True
     resource.create = create
+
+
+# ── Inputs that are not provider calls ──────────────────────────────────────
+
+def replay_input(name: str, key_parts, value):
+    """
+    Freeze a non-provider input that changes run to run (for example Scout's
+    exposure history and the clock it is compared against).
+    capture ("all"): save `value` and return it.
+    saved: return the captured value; if none was captured, list it as
+    missing and return None (the caller uses `value` and the run reports
+    the gap).
+    other modes: return `value`.
+    """
+    mode = _effective_mode()
+    if mode not in ("all", "saved"):
+        return value
+    key = make_key("input", name, key_parts)
+    if mode == "all":
+        try:
+            put(key, json.loads(json.dumps(value, default=str)))
+        except Exception:
+            pass
+        return value
+    saved = get(key)
+    if saved is None:
+        _note_missing("input", f"{name} (not in the capture)")
+        return None
+    _note_replayed()
+    return saved
+
+
+def is_saved_run() -> bool:
+    return _effective_mode() == "saved"
 
 
 # ── DuckDuckGo and skipped search steps ─────────────────────────────────────

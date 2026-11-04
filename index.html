@@ -2460,8 +2460,12 @@ const PROXY_URL = 'https://signalscope-api.onrender.com';
     const h = new Headers(init.headers || {});
     h.set('X-Replay', mode);
     init.headers = h;
+    // Requests without an access code (page-load lookups) can't use replay,
+    // so they don't say anything about it; only coded requests update the badge.
+    const hasCode = !!(h.get('X-Agent-Token') || '').trim();
     return _fetch(input, init).then(res => {
       try {
+        if (!hasCode) return res;
         const eff = res.headers.get('X-Replay-Effective');
         serverMode = eff || 'not allowed on server';
         paint();
