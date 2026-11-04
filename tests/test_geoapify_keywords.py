@@ -91,7 +91,8 @@ def test_nail_places_rank_first_and_nothing_is_removed():
 def test_reasons_use_the_card_format():
     ranked = {c["business_name"]: c for c in _rank(ASTORIA)}
     r = ranked["Camila Nails Salon"]["score_reasons"][0]
-    assert r["impact"] == "positive" and r["key"] == "query_match" and "OpenStreetMap" in r["signal"]
+    assert r["impact"] == "positive" and r["key"] == "query_match"
+    assert r["signal"] == "Listed as nail (OpenStreetMap beauty=nails), matching your search"
     assert ranked["Boris Barber Shop"]["score_reasons"][0]["impact"] == "negative"
     assert ranked["Alex VIP"]["score_reasons"][0]["impact"] == "neutral"
 
@@ -132,3 +133,18 @@ def test_search_geoapify_keeps_type_evidence(monkeypatch):
     out = app.search_geoapify("nail salon", "Astoria, NY")
     assert out[0]["geo_categories"] == ["service", "service.beauty"]
     assert out[0]["osm_tags"] == {"shop": "beauty", "beauty": "nails"}    # only type tags kept
+
+
+def test_reason_names_the_exact_evidence():
+    by = {c["business_name"]: c for c in ASTORIA}
+    m = app.geoapify_query_match(by["Lucky Beauty"], {"nail"})          # beauty=nails;waxing
+    assert m["reason"] == "Listed as nail (OpenStreetMap beauty=nails), matching your search"
+    m = app.geoapify_query_match(by["Boris Barber Shop"], {"nail"})
+    assert m["reason"] == "Listed as barber (OpenStreetMap shop=barber), not nail"
+    # category-only evidence is credited to Geoapify, not OpenStreetMap
+    m = app.geoapify_query_match(by["Desi First Hair Cut"], {"nail"})
+    assert "Geoapify category service.beauty.hairdresser" in m["reason"]
+    assert "OpenStreetMap" not in m["reason"]
+    # an OpenStreetMap tag wins over a Geoapify category for the same type
+    m = app.geoapify_query_match(by["Blonde Me NYC"], {"nail"})
+    assert "OpenStreetMap shop=hairdresser" in m["reason"]
