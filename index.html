@@ -4280,6 +4280,11 @@ function pollDeepAnalysis(jobId) {
           // One analysis: first and only render, then save once
           render(report);
           saveReportToNetworks(report, pending.siteUrl, pending.mode);
+          const ns = report.network_save;
+          if (ns && typeof showNetToast === 'function') {
+            if (ns.ok) showNetToast(ns.already_saved ? '✓ Already in Network' : '✓ Saved to Network');
+            else if (ns.error) showNetToast('⚠ Not saved to Network: ' + ns.error);
+          }
           return;
         }
         // Re-render report with full data (noSave=true — already saved)
