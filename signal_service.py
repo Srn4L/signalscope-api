@@ -1149,6 +1149,7 @@ def apply_saturation_rerank(
     candidates:     list[dict],
     exposure_stats: dict,
     context:        dict | None = None,
+    now:            "_dt.datetime | None" = None,
 ) -> list[dict]:
     """
     Rerank candidates using token-scoped and global exposure history.
@@ -1166,7 +1167,15 @@ def apply_saturation_rerank(
     exposure_stats = exposure_stats or {}
     context        = context        or {}
 
-    now = _dt.datetime.now(_dt.timezone.utc)
+    # `now` can be passed in so an owner replay run compares exposure against
+    # the captured clock and ranks exactly like the capture.
+    if isinstance(now, str):
+        try:
+            now = _dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
+        except Exception:
+            now = None
+    if now is None:
+        now = _dt.datetime.now(_dt.timezone.utc)
 
     def _key(c: dict) -> str:
         import re as _re

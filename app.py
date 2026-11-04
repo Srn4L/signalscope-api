@@ -218,7 +218,7 @@ try:
     if replay_service.REPLAY_ON:
         replay_service.install_http_replay()
         print("[Replay] dev replay allowed for owner requests that send "
-              "X-Replay: ai|all; all other traffic is live", flush=True)
+              "X-Replay: all|saved|ai; all other traffic is live", flush=True)
 except Exception as _replay_import_err:
     print(f"[WARN] replay_service unavailable: {_replay_import_err}", flush=True)
     replay_service = None
@@ -292,6 +292,31 @@ def _replay_report(response):
     except Exception as e:
         log_error("replay after_request", e)
     return response
+
+
+def _replay_is_saved_run() -> bool:
+    return replay_service is not None and replay_service.is_saved_run()
+
+
+def _scout_exposure_inputs(scored, token_hash, niche, location):
+    """
+    Exposure history (from the database) and the current time feed Scout's
+    rerank. Both change after every run, including the capture run itself,
+    so an owner capture saves them and a saved-data replay reuses them.
+    Returns (exposure_stats, now_or_None).
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    stats = get_candidate_exposure_stats(scored, token_hash)
+    if replay_service is None:
+        return stats, None
+    names = sorted({(c.get("business_name") or c.get("name") or "").strip().lower() for c in scored})
+    frozen = replay_service.replay_input(
+        "scout_exposure", [token_hash or "", (niche or "").lower(), (location or "").lower(), names],
+        {"stats": stats, "now": _dt.now(_tz.utc).isoformat()},
+    )
+    if not frozen:
+        return stats, None
+    return frozen.get("stats") or {}, frozen.get("now")
 
 
 # Routes that always call providers live; they can never honor saved-only replay.
@@ -480,6 +505,21 @@ def _refund_replayed_call(url: str):
 # providers are skipped whenever the shared reservation cannot be confirmed;
 # search falls through to the next step.
 _FAIL_CLOSED_PROVIDERS = {"exa"}
+
+
+def _budget_ok_replayable(provider: str, *key_parts) -> bool:
+    """
+    api_budget_ok for calls an owner replay must reproduce: a call skipped
+    by its daily cap during a capture is skipped again in the saved rerun,
+    instead of being reported as missing.
+    """
+    rs_mod = globals().get("replay_service")
+    if rs_mod is not None and rs_mod.was_skipped(provider, list(key_parts), 0):
+        return False
+    ok = api_budget_ok(provider)
+    if not ok and rs_mod is not None:
+        rs_mod.note_skip(provider, list(key_parts), 0)
+    return ok
 
 
 def api_budget_ok(provider: str, amount: int = 1) -> bool:
@@ -5540,7 +5580,7 @@ def search_google_places(niche, location, limit=10, fetch_details=True):
     if not key:
         print("  [Provider] Google Places skipped: GOOGLE_PLACES_API_KEY is not set", flush=True)
         return []
-    if not api_budget_ok("google_search"):
+    if not _budget_ok_replayable("google_search", "textsearch", niche, location):
         return []
     try:
         r = req.get(
@@ -5640,7 +5680,7 @@ def enrich_shown_google_cards(results, max_calls=5):
         place_id = b.get("google_place_id") or ""
         if not place_id:
             continue
-        if not api_budget_ok("google_details"):
+        if not _budget_ok_replayable("google_details", place_id):
             break
         calls += 1
         det = fetch_google_place_details(place_id, timeout=5)
@@ -5861,7 +5901,7 @@ def nearby_competitors_google(lat, lng, niche, radius_m=1500, limit=8, fetch_det
     key = os.environ.get('GOOGLE_PLACES_API_KEY', '')
     if not key or not lat or not lng:
         return []
-    if not api_budget_ok("google_search"):
+    if not _budget_ok_replayable("google_search", "nearby", round(float(lat), 5), round(float(lng), 5), niche):
         return []
     try:
         import requests as req
@@ -6519,7 +6559,7 @@ def prospect():
         try:
             token_raw  = request.headers.get("X-Agent-Token", "")
             _th        = hash_token(token_raw) if token_raw else None
-            expo_stats = get_candidate_exposure_stats(scored, _th)
+            expo_stats, _rerank_now = _scout_exposure_inputs(scored, _th, niche, location)
             _rerank_ctx = {
                 "user_role":     input_intelligence.get("user_role") or body.get("user_role"),
                 "mode":          mode,
@@ -6528,7 +6568,7 @@ def prospect():
                 "service_angle":  input_intelligence.get("service_angle"),
                 "niche_key":      niche_intelligence.get("niche_key") if niche_intelligence else None,
             }
-            scored = apply_saturation_rerank(scored, expo_stats, _rerank_ctx)
+            scored = apply_saturation_rerank(scored, expo_stats, _rerank_ctx, now=_rerank_now)
             ranking_strategy = {
                 "type":                    "saturation_aware",
                 "message":                 "Results are reranked to reduce repeated leads and surface lower-saturation opportunities.",
@@ -6612,7 +6652,9 @@ def prospect():
                         "website_checked":  b.get("website_checked", True),
                     },
                 })
-                if biz_id and token_hash:
+                # A saved-data replay is a test rerun, not a real showing, so it
+                # does not add exposure history.
+                if biz_id and token_hash and not _replay_is_saved_run():
                     log_discovery_event(
                         token_hash=token_hash,
                         search_id=search_id,
