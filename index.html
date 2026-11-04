@@ -1373,6 +1373,18 @@ body[data-view="research"] #researchView{display:block;}
 body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceView{display:none;}
 
 /* shared pieces */
+.scout-why-headline{font-family:var(--font-display);font-size:18px;font-weight:600;line-height:1.3;color:var(--heading);margin:12px 0 10px;}
+.scout-why-fits{display:flex;flex-direction:column;gap:7px;margin-bottom:12px;}
+.scout-why-label{font:600 11px var(--font-head);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);}
+.scout-why-item{display:grid;grid-template-columns:20px minmax(0,1fr);gap:8px;font-size:14px;line-height:1.5;color:var(--text);}
+.scout-why-mark{width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font:700 11px var(--font-head);margin-top:1px;}
+.scout-why-item.pos .scout-why-mark{background:#E3EEE4;color:#2F5E45;}
+.scout-why-item.neu .scout-why-mark{background:#EFE6D6;color:#6B5A4E;}
+.scout-why-item.neg .scout-why-mark{background:#F7E1D8;color:#8C2F1A;}
+:root:not([data-theme="light"]) .scout-why-item.pos .scout-why-mark{background:#23382B;color:#B7E0C3;}
+:root:not([data-theme="light"]) .scout-why-item.neu .scout-why-mark{background:#34231A;color:#C9B8A6;}
+:root:not([data-theme="light"]) .scout-why-item.neg .scout-why-mark{background:#3D2620;color:#F5C2AE;}
+.scout-why-note{font-size:12.5px;color:var(--muted);margin-bottom:10px;}
 .yh-band{position:relative;background:var(--band);box-shadow:0 0 0 100vmax var(--band);clip-path:inset(0 -100vmax);
   --text:var(--band-text);--muted:var(--band-muted);--heading:var(--band-text);--accent:var(--band-accent);}
 .yh-card{background:var(--card);border:1px solid var(--border);border-radius:18px;}
@@ -1555,6 +1567,8 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
   .rs-find .lab{grid-column:2;justify-self:start;}
   .ws-head{flex-direction:column;align-items:flex-start;}
   .scout-lens-override{display:flex;flex-wrap:wrap;max-width:100%;}
+  .scout-card-footer{flex-wrap:wrap;gap:10px;}
+  .scout-card-actions{flex-wrap:wrap;gap:8px;}
   .scout-lens-opt{padding:8px 10px;}
   .scout-lens-opt:not(:last-child){border-right:none;}
   .wrap,body{overflow-x:hidden;}
@@ -1638,7 +1652,7 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
   <section class="yh-band dc-band">
     <p class="yh-eyebrow" id="dcDate"></p>
     <h1 class="dc-title">Discover local opportunities</h1>
-    <p class="dc-dek">yelhao reads public signals like reviews, websites, socials and booking pages, then ranks local businesses by opportunity and explains every score.</p>
+    <p class="dc-dek">yelhao reads public signals like reviews, websites, socials and booking pages, then ranks local businesses by how well they fit what you're looking for, and explains why.</p>
     <form class="dc-search" onsubmit="yhSearch(event)" role="search">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6B5A4E" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>
       <input id="dcSearch" type="search" placeholder="Try: nail salons in Astoria with weak marketing" aria-label="Describe the businesses you are looking for"/>
@@ -1652,7 +1666,7 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
       <section>
         <div class="dc-h2row"><h2 class="yh-h2">How yelhao works</h2></div>
         <div class="dc-steps">
-          <a class="yh-card dc-step" href="#/scout" style="text-decoration:none"><span class="dc-step-n">1</span><span class="dc-step-t">Scout</span><span class="dc-step-d">Describe the businesses you want. yelhao finds them and ranks them by Demand, Gap and Conversion.</span></a>
+          <a class="yh-card dc-step" href="#/scout" style="text-decoration:none"><span class="dc-step-n">1</span><span class="dc-step-t">Scout</span><span class="dc-step-d">Describe what you are looking for. yelhao finds businesses and ranks them by how well they fit, with the reasons.</span></a>
           <a class="yh-card dc-step" href="#/analyze" style="text-decoration:none"><span class="dc-step-n">2</span><span class="dc-step-t">Analyze</span><span class="dc-step-d">Get an evidence-based report on one business, with every claim labeled.</span></a>
           <a class="yh-card dc-step" href="#/networks" style="text-decoration:none"><span class="dc-step-n">3</span><span class="dc-step-t">Networks</span><span class="dc-step-d">Save the ones worth acting on, then export or sync them to your CRM.</span></a>
         </div>
@@ -2039,7 +2053,7 @@ body[data-view="discover"] #workspaceView,body[data-view="research"] #workspaceV
 <!-- PROSPECT PANEL -->
 <div class="scout-panel on" id="scoutPanel">
   <div class="section-label" style="margin-bottom:20px;">Scout</div>
-  <p class="scout-intro">Describe what you're looking for — yelhao picks the scoring lens, ranks businesses by Demand, Gap, and Conversion, and explains every score.</p>
+  <p class="scout-intro">Describe what you're looking for. yelhao works out your goal, ranks businesses by how well they fit it, and tells you why.</p>
 
   <!-- Goal input — primary search -->
   <div class="scout-goal-field">
@@ -4529,7 +4543,7 @@ async function runProspect(niche, location, mode, goal, _inferred) {
 
   const scoutSteps = [
     'Discovering businesses...','Searching Google Places...','Scoring candidates...',
-    'Ranking by opportunity...','Applying filters...','Building results...'
+    'Ranking by fit...','Applying filters...','Building results...'
   ];
   let stepIdx = 0;
   const stepTimer = setInterval(() => {
@@ -4621,7 +4635,7 @@ function renderScoutResults(data) {
   const resultMix   = data.result_mix || {};
 
   let html = `<div class="scout-results-header">
-    <div class="scout-results-meta">${leads.length} businesses ranked · ${esc(data.niche)} in ${esc(data.location)}</div>
+    <div class="scout-results-meta">${leads.length} businesses ranked for what you're looking for · ${esc(data.niche)} in ${esc(data.location)}</div>
     <div class="scout-results-mode">${esc(modeLabel)}</div>
   </div>`;
 
@@ -4774,6 +4788,18 @@ function renderScoutResults(data) {
       </div>
     </div>` : '';
 
+    // Why this fits: up to 3 reasons, positives first, Unknown shown as neutral
+    const _order = { positive: 0, neutral: 1, negative: 2 };
+    const _w = { high: 0, medium: 1, low: 2 };
+    const whyFitsHtml = reasons.slice()
+      .sort((a, b) => (_order[a.impact] ?? 1) - (_order[b.impact] ?? 1) || (_w[a.weight] ?? 1) - (_w[b.weight] ?? 1))
+      .slice(0, 3)
+      .map(r => {
+        const kind = r.impact === 'positive' ? 'pos' : r.impact === 'negative' ? 'neg' : 'neu';
+        const mark = kind === 'pos' ? '✓' : kind === 'neg' ? '!' : '?';
+        return `<div class="scout-why-item ${kind}"><span class="scout-why-mark" aria-hidden="true">${mark}</span><span>${esc(r.signal)}</span></div>`;
+      }).join('');
+
     // Top signal — prefer backend top_signal, fallback to highest-weight reason
     const topSignalText = topSignalV3 ||
       (() => { const r = reasons.find(x => x.impact === 'positive' && x.weight === 'high') || reasons[0]; return r ? r.signal : null; })();
@@ -4801,33 +4827,13 @@ function renderScoutResults(data) {
             })() : ''}
           </div>
         </div>
-        <div class="scout-card-right">
-          <div class="scout-score-block">
-            <div class="scout-score-num" style="color:${scoreColor}">${score}</div>
-            <div class="scout-score-label">Opportunity Score</div>
-            <div class="scout-score-subtitle">${modeLabel}</div>
-            <div class="scout-score-conf ${conf}" title="${
-              conf === 'high' ? 'High confidence: multiple verified signals' :
-              conf === 'medium' ? 'Medium confidence: Google listing and web signals' :
-              'Low confidence: limited public data. Full Analyze may reveal more.'
-            }">${conf}</div>
-          </div>
-        </div>
       </div>
-      <div class="scout-score-bar-wrap">
-        <div class="scout-score-bar"><div class="scout-score-fill" style="width:${fillPct}%;background:${scoreColor}"></div></div>
-      </div>
-      ${topSignalText ? `<div class="scout-top-signal-v3">${esc(topSignalText)}</div>` : ''}
-      ${biz.quick_insight ? `<div class="scout-quick-insight">💡 ${esc(biz.quick_insight)}</div>` : ''}
-      ${sigBarsHtml}
-      ${oppSummary ? `<div class="scout-opp-summary">${esc(oppSummary)}</div>` : ''}
-      ${reasonsHtml ? `<details style="margin-bottom:10px;">
-        <summary style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);cursor:pointer;list-style:none;user-select:none;">▶ Signal detail</summary>
-        <div class="scout-reasons" style="margin-top:8px;">
-          <div class="scout-reasons-label">Why this scored here</div>
-          ${reasonsHtml}
-        </div>
-      </details>` : ''}
+      ${topSignalText ? `<div class="scout-why-headline">${esc(topSignalText)}</div>` : ''}
+      ${whyFitsHtml ? `<div class="scout-why-fits">
+        <div class="scout-why-label">Why this fits what you're looking for</div>
+        ${whyFitsHtml}
+      </div>` : ''}
+      ${conf === 'low' ? `<div class="scout-why-note">Based on limited public data. Analyze for a fuller picture.</div>` : ''}
       ${nsPlain ? `<div class="scout-need-plain">${esc(nsPlain)}</div>` : ''}
       ${whyNow  ? `<div class="scout-why-now">⚡ ${esc(whyNow)}</div>` : ''}
       ${biz.best_contact_path ? `<div style="margin-bottom:8px;">${_miniContactBadge(biz.best_contact_path)}</div>` : ''}
