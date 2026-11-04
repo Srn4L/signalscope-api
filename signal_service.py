@@ -1463,8 +1463,17 @@ def compute_need_score(
         any(kw in website.lower() for kw in ("booksy", "fresha", "vagaro", "mindbody", "calendly"))
     )
 
+    # Milestone 1: Scout's Google candidates arrive with *_checked=False for
+    # fields nobody looked up. Those add no need points and no absence reason.
+    # Every other caller omits the keys and keeps today's behavior.
+    website_checked = candidate.get("website_checked") is not False
+    social_checked  = candidate.get("social_checked") is not False
+    booking_checked = candidate.get("booking_checked") is not False
+
     # -- Website signals -------------------------------------------------------
-    if not website:
+    if not website and not website_checked:
+        confidence_misses += 1          # not checked: lowers confidence only
+    elif not website:
         score += 25
         reasons.append("No website confirmed")
         confidence_misses += 1
@@ -1478,7 +1487,8 @@ def compute_need_score(
     # -- Social signals --------------------------------------------------------
     if not has_ig and not has_fb:
         score += 18
-        reasons.append("No social profiles detected")
+        if social_checked:
+            reasons.append("No social profiles detected")
         confidence_misses += 1
     elif has_ig or has_fb:
         confidence_hits += 1
@@ -1486,7 +1496,8 @@ def compute_need_score(
     # -- Booking signals -------------------------------------------------------
     if not has_booking:
         score += 18
-        reasons.append("Booking path not clearly surfaced")
+        if booking_checked:
+            reasons.append("Booking path not clearly surfaced")
 
     # -- Review signals --------------------------------------------------------
     if reviews == 0:
@@ -1518,11 +1529,13 @@ def compute_need_score(
     problem_signal = (input_intelligence.get("problem_signal") or "").lower()
     if "social" in problem_signal and not has_ig:
         score += 8
-        reasons.append("Matches queried problem: weak social presence")
+        if social_checked:
+            reasons.append("Matches queried problem: weak social presence")
     if "booking" in problem_signal and not has_booking:
         score += 8
-        reasons.append("Matches queried problem: missing booking path")
-    if "website" in problem_signal and not website:
+        if booking_checked:
+            reasons.append("Matches queried problem: missing booking path")
+    if "website" in problem_signal and not website and website_checked:
         score += 8
         reasons.append("Matches queried problem: no website")
 
