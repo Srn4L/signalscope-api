@@ -232,6 +232,68 @@ def _carry(fn):
 app = Flask(__name__)
 
 
+def _replay_missing_message(summary) -> str:
+    items = summary.get("missing") or []
+    head = "; ".join(f"{m['kind']}: {m['what']}" for m in items[:3])
+    more = f" (+{summary['missing_count'] - 3} more)" if summary.get("missing_count", 0) > 3 else ""
+    return (f"Saved data missing for {summary.get('missing_count', 0)} call(s), so nothing was sent "
+            f"live and the run stopped. Capture this run first (replay=all). {head}{more}")
+
+
+def _finish_replay_job(job_id):
+    """End of a background job in an owner replay run: attach the run summary,
+    or replace the result with the missing list in saved-only mode."""
+    if replay_service is None:
+        return
+    rs = replay_service.run_state()
+    if rs is None:
+        return
+    summary = rs.summary()
+    job = JOBS.get(job_id) or {}
+    if summary["mode"] == "saved" and summary["missing_count"]:
+        JOBS[job_id] = {"status": "error", "error": _replay_missing_message(summary),
+                        "replay_missing": summary["missing"], "replay_run": summary, "ts": time.time()}
+        return
+    job["replay_run"] = summary
+    if isinstance(job.get("result"), dict):
+        job["result"]["replay_run"] = summary
+    JOBS[job_id] = job
+
+
+@app.after_request
+def _replay_report(response):
+    """Owner replay runs: report the mode the server actually used and the
+    live-call count; in saved-only mode, a run with missing data returns the
+    missing list instead of a result."""
+    if replay_service is None or not replay_service.REPLAY_ON:
+        return response
+    try:
+        mode = replay_service.current_mode()
+        response.headers["X-Replay-Effective"] = mode
+        rs = replay_service.run_state()
+        if rs is None:
+            return response
+        summary = rs.summary()
+        response.headers["X-Replay-Live-Calls"] = str(summary["live_calls"])
+        response.headers["X-Replay-Missing"] = str(summary["missing_count"])
+        if not rs.has_activity() or not response.is_json:
+            return response
+        body = response.get_json(silent=True)
+        if not isinstance(body, dict):
+            return response
+        if mode == "saved" and summary["missing_count"]:
+            body = {"ok": False, "error": _replay_missing_message(summary),
+                    "replay_missing": summary["missing"], "replay_run": summary,
+                    "job_id": body.get("job_id")}
+            response.status_code = 409
+        else:
+            body["replay_run"] = summary
+        response.set_data(json.dumps(body))
+    except Exception as e:
+        log_error("replay after_request", e)
+    return response
+
+
 @app.before_request
 def _set_replay_mode():
     # Every request gets a mode, so a reused worker thread never keeps the
@@ -263,7 +325,7 @@ def log_error(context, error, **kwargs):
     if os.environ.get("DEBUG_MODE", "").lower() == "true":
         print(traceback.format_exc(), flush=True)
 
-CORS(app)
+CORS(app, expose_headers=["X-Replay-Effective", "X-Replay-Live-Calls", "X-Replay-Missing"])
 
 # --- TOKEN HASHING -----------------------------------------------------------
 def hash_token(raw: str) -> str:
@@ -373,20 +435,10 @@ def _refund_replayed_call(url: str):
 
 # Providers whose cap must hold even when the shared database counter is
 # down: fall back to a per-process count instead of allowing every call.
+# A local count would restart at zero on every process and restart, so these
+# providers are skipped whenever the shared reservation cannot be confirmed;
+# search falls through to the next step.
 _FAIL_CLOSED_PROVIDERS = {"exa"}
-_LOCAL_BUDGET = {}   # (day, provider) -> count
-_LOCAL_BUDGET_LOCK = threading.Lock()
-
-
-def _local_budget_ok(provider, amount, limit, day) -> bool:
-    with _LOCAL_BUDGET_LOCK:
-        n = _LOCAL_BUDGET.get((day, provider), 0) + amount
-        if n > limit:
-            print(f"  [Budget] {provider} daily cap reached ({limit}, local count; "
-                  f"database counter unavailable); skipping provider", flush=True)
-            return False
-        _LOCAL_BUDGET[(day, provider)] = n
-        return True
 
 
 def api_budget_ok(provider: str, amount: int = 1) -> bool:
@@ -394,10 +446,15 @@ def api_budget_ok(provider: str, amount: int = 1) -> bool:
     Reserve `amount` calls of a paid outside API for today (UTC). Returns False
     when the daily cap would be exceeded (the reservation is undone), so the
     caller can skip the provider. Allows the call if the counter is
-    unavailable, matching enforce_cost_limit.
+    unavailable, matching enforce_cost_limit, except for providers in
+    _FAIL_CLOSED_PROVIDERS, which are skipped then.
+    In an owner "saved" replay run no live call can happen, so nothing is
+    reserved.
     """
     limit = API_CALL_LIMITS.get(provider)
     if limit is None or amount <= 0:
+        return True
+    if replay_service is not None and replay_service.current_mode() == "saved":
         return True
     if limit <= 0:
         print(f"  [Budget] {provider} is turned off (limit 0)", flush=True)
@@ -407,7 +464,8 @@ def api_budget_ok(provider: str, amount: int = 1) -> bool:
     total = increment_usage(day, "global", "all", "api_" + provider, amount) if _DB_AVAILABLE else None
     if total is None:
         if provider in _FAIL_CLOSED_PROVIDERS:
-            return _local_budget_ok(provider, amount, limit, day)
+            print(f"  [Budget] {provider} skipped: shared daily counter unavailable", flush=True)
+            return False
         return True
     if total > limit:
         increment_usage(day, "global", "all", "api_" + provider, -amount)
@@ -802,14 +860,40 @@ def _split_site_operators(query):
     return re.sub(r'\s+', ' ', clean).strip(), include, exclude
 
 
-def exa_search(query, max_results=6):
+def _search_status(status_out, status, detail=""):
+    """Record how a provider call ended: skipped, failed, empty or results."""
+    if isinstance(status_out, dict):
+        status_out["status"] = status
+        if detail:
+            status_out["detail"] = str(detail)[:200]
+
+
+def _provider_skipped(provider, query, max_results, has_key, status_out):
+    """
+    True when this search step should not run (no key, daily cap, or skipped
+    during an owner capture). Records the skip for replay capture.
+    """
+    if replay_service is not None and replay_service.was_skipped(provider, query, max_results):
+        _search_status(status_out, "skipped", "skipped in the saved capture")
+        return True
+    budget_key = "firecrawl_search" if provider == "firecrawl" else provider
+    if not has_key or not api_budget_ok(budget_key):
+        _search_status(status_out, "skipped", "no key" if not has_key else "daily cap reached or counter unavailable")
+        if replay_service is not None:
+            replay_service.note_skip(provider, query, max_results)
+        return True
+    return False
+
+
+def exa_search(query, max_results=6, status_out=None):
     '''
     Exa web search (lite: $4 per 1,000, highlights included). Returns a list,
-    possibly empty, or None when Exa was not tried (no key or daily cap).
-    site: operators become includeDomains, so off-Google discovery queries
-    (Instagram, Facebook, Reddit, booking sites) keep their domain limits.
+    possibly empty, or None when Exa was skipped or failed (status_out says
+    which). site: operators become includeDomains, so off-Google discovery
+    queries (Instagram, Facebook, Reddit, booking sites) keep their domain
+    limits.
     '''
-    if not EXA_API_KEY or not api_budget_ok("exa"):
+    if _provider_skipped("exa", query, max_results, bool(EXA_API_KEY), status_out):
         return None
     clean, include, exclude = _split_site_operators(query)
     body = {
@@ -828,6 +912,7 @@ def exa_search(query, max_results=6):
                      timeout=12)
         if r.status_code != 200:
             print(f"[Search] Exa HTTP {r.status_code} ({r.text[:120]!r}) - falling back", flush=True)
+            _search_status(status_out, "failed", f"HTTP {r.status_code}")
             return None
         data = r.json()
         _cost = (data.get("costDollars") or {}).get("total")
@@ -843,15 +928,17 @@ def exa_search(query, max_results=6):
                 "body":     text_body[:600],
                 "provider": "exa",
             })
+        _search_status(status_out, "results" if out else "empty")
         return out
     except Exception as e:
-        log_error("Exa search", e, fallback="SerpAPI")
+        log_error("Exa search", e, fallback="Firecrawl")
+        _search_status(status_out, "failed", f"{type(e).__name__}: {e}")
         return None
 
 
-def firecrawl_search(query, max_results=6):
+def firecrawl_search(query, max_results=6, status_out=None):
     '''Firecrawl search fallback (free monthly credits). List or None.'''
-    if not FIRECRAWL_API_KEY or not api_budget_ok("firecrawl_search"):
+    if _provider_skipped("firecrawl", query, max_results, bool(FIRECRAWL_API_KEY), status_out):
         return None
     try:
         r = req.post("https://api.firecrawl.dev/v1/search",
@@ -861,6 +948,7 @@ def firecrawl_search(query, max_results=6):
                      timeout=15)
         if r.status_code != 200:
             print(f"[Search] Firecrawl search HTTP {r.status_code} - falling back", flush=True)
+            _search_status(status_out, "failed", f"HTTP {r.status_code}")
             return None
         data = r.json().get("data")
         if isinstance(data, dict):          # newer response shape: {"web": [...]}
@@ -873,15 +961,17 @@ def firecrawl_search(query, max_results=6):
                 "body":     (res.get("description") or res.get("markdown") or "")[:600],
                 "provider": "firecrawl",
             })
+        _search_status(status_out, "results" if out else "empty")
         return out
     except Exception as e:
-        log_error("Firecrawl search", e, fallback="DuckDuckGo")
+        log_error("Firecrawl search", e, fallback="SerpAPI")
+        _search_status(status_out, "failed", f"{type(e).__name__}: {e}")
         return None
 
 
-def serpapi_search(query, max_results=6):
-    '''SerpAPI (Google results). List, possibly empty, or None when not tried.'''
-    if SERP_API_KEY and api_budget_ok("serpapi"):
+def serpapi_search(query, max_results=6, status_out=None):
+    '''SerpAPI (Google results). List, possibly empty, or None when skipped or failed.'''
+    if not _provider_skipped("serpapi", query, max_results, bool(SERP_API_KEY), status_out):
         try:
             import requests as _req
             r = _req.get(
@@ -909,11 +999,17 @@ def serpapi_search(query, max_results=6):
                     # SerpAPI returned 200 but no organic results (quota/plan limit)
                     print(f"[Search] SerpAPI 200 but 0 results for query={query!r:.60} "
                           f"(serpapi_error={str(data.get('error', ''))[:150]!r}) - falling back to DDG", flush=True)
+                    if data.get("error") and "hasn't returned any results" not in str(data.get("error")):
+                        _search_status(status_out, "failed", f"SerpAPI error: {data.get('error')}")
+                        return snippets
+                _search_status(status_out, "results" if snippets else "empty")
                 return snippets
             else:
                 print(f"[Search] SerpAPI HTTP {r.status_code} ({r.text[:150]!r}) - falling back to DDG", flush=True)
+                _search_status(status_out, "failed", f"HTTP {r.status_code}")
         except Exception as e:
             log_error("SerpAPI search", e, fallback="DuckDuckGo")
+            _search_status(status_out, "failed", f"{type(e).__name__}: {e}")
     return None
 
 
@@ -952,7 +1048,11 @@ def search_web(query, max_results=6):
         if _saved is not None:
             return _saved
     if ddg_cooling_down():
+        if replay_service is not None:
+            replay_service.ddg_put(query, max_results, [])
         return snippets  # blocked recently: skip instead of waiting on a timeout
+    if replay_service is not None:
+        replay_service.note_live("duckduckgo")
     try:
         with DDGS() as ddgs:
             results = ddgs.text(query, max_results=max_results)
@@ -3196,7 +3296,9 @@ def agent():
     # -- Cache check -----------------------------------------------------------
     ck = cache_key(business_name, website_url, location)
     cached = get_cached(ck)
-    if cached and not user_content:
+    # Owner replay runs always run the pipeline, so they measure what they claim.
+    _replay_run = replay_service is not None and replay_service.current_mode() != "off"
+    if cached and not user_content and not _replay_run:
         cached["_from_cache"] = True
         return jsonify(cached)
 
@@ -3486,6 +3588,7 @@ def agent():
         except Exception as e:
             JOBS[job_id] = {"status": "error", "error": str(e), "ts": time.time()}
             print(f"  [X] Deep work failed: {e}")
+        _finish_replay_job(job_id)
 
     # -- Intelligence layer injection (Phase 6) --------------------------------
     # Wraps in try/except so Analyze NEVER fails if this layer errors.
@@ -6700,7 +6803,9 @@ def dev_search_compare():
     """
     Owner only. Run the same queries through each search provider directly
     (no fallback chain, always live) and return the results side by side, so
-    providers can be compared on the same input.
+    providers can be compared on the same input. Each provider reports
+    skipped, failed, empty or results; overlap and only_in use successful
+    searches only (empty included).
 
     Body: {"queries": ["..."], "providers": ["exa", "firecrawl", "serpapi"],
            "max_results": 6}
@@ -6730,21 +6835,29 @@ def dev_search_compare():
         urls = {}
         for p in wanted:
             t0 = time.time()
-            res = fns[p](q, n)
+            st = {}
+            res = fns[p](q, n, status_out=st)
+            status = st.get("status") or ("results" if res else "empty" if res == [] else "failed")
             row["providers"][p] = {
-                "status":  "not_tried (no key or daily cap)" if res is None else "ok",
+                "status":  status,            # skipped | failed | empty | results
+                "detail":  st.get("detail", ""),
                 "seconds": round(time.time() - t0, 2),
                 "results": [{"title": r.get("title"), "url": r.get("url"), "domain": _domain(r.get("url", "")),
                              "body": (r.get("body") or "")[:240]} for r in (res or [])],
             }
-            urls[p] = {r.get("url") for r in (res or []) if r.get("url")}
-        tried = [p for p in wanted if urls.get(p)]
-        row["overlap"] = {
-            f"{a}&{b}": len(urls[a] & urls[b])
-            for i, a in enumerate(tried) for b in tried[i + 1:]
-        }
-        row["only_in"] = {p: sorted(urls[p] - set().union(*(urls[o] for o in tried if o != p)))
-                          for p in tried}
+            if status in ("results", "empty"):
+                urls[p] = {r.get("url") for r in (res or []) if r.get("url")}
+        # Compare only providers whose search succeeded (empty counts as a
+        # success), so a failed or skipped provider never makes another
+        # provider's URLs look unique.
+        ok = [p for p in wanted if p in urls]
+        row["compared"] = ok
+        row["not_compared"] = {p: row["providers"][p]["status"] for p in wanted if p not in urls}
+        row["overlap"] = {f"{a}&{b}": len(urls[a] & urls[b]) for i, a in enumerate(ok) for b in ok[i + 1:]}
+        row["only_in"] = (
+            {p: sorted(urls[p] - set().union(*(urls[o] for o in ok if o != p))) for p in ok}
+            if len(ok) >= 2 else {}
+        )
         out.append(row)
     return jsonify({"ok": True, "max_results": n, "comparisons": out})
 

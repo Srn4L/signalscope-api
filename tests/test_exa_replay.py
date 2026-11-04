@@ -163,11 +163,11 @@ def test_crm_writes_and_other_posts_are_never_replayed(net, replay):
     assert len(fake.calls) == 6
 
 
-def test_failed_replies_are_not_saved(net, replay):
+def test_failed_replies_are_not_reused_in_capture_mode(net, replay):
     fake = net(lambda r: (429, {"error": "rate"}))
     requests.get("https://maps.googleapis.com/maps/api/place/details/json", params={"place_id": "p"})
     requests.get("https://maps.googleapis.com/maps/api/place/details/json", params={"place_id": "p"})
-    assert len(fake.calls) == 2
+    assert len(fake.calls) == 2                          # "all" retries a failure live
 
 
 def test_health_checks_always_reach_the_real_service(net, replay):
@@ -273,15 +273,38 @@ def test_exa_request_is_lite_and_never_over_ten_results(net):
     assert set(sent["contents"]) == {"highlights"}       # no paid extras (summary)
 
 
-def test_exa_cap_holds_without_the_database(monkeypatch):
+@pytest.mark.parametrize("db_available,counter", [(False, None), (True, None)])
+def test_exa_is_skipped_when_the_shared_counter_cannot_confirm(monkeypatch, db_available, counter):
     monkeypatch.undo()                                   # use the real api_budget_ok
-    monkeypatch.setattr(app, "_DB_AVAILABLE", False)
-    monkeypatch.setitem(app.API_CALL_LIMITS, "exa", 3)
-    app._LOCAL_BUDGET.clear()
-    got = [app.api_budget_ok("exa") for _ in range(5)]
-    assert got == [True, True, True, False, False]
+    monkeypatch.setattr(app, "_DB_AVAILABLE", db_available)
+    monkeypatch.setattr(app, "increment_usage", lambda *a, **k: counter, raising=False)
+    # Exa never runs on an unconfirmed reservation, however many times asked
+    assert not any(app.api_budget_ok("exa") for _ in range(200))
     # other providers keep today's behavior when the counter is down
     assert all(app.api_budget_ok("serpapi") for _ in range(20))
+
+
+def test_exa_down_counter_falls_through_to_firecrawl(net, monkeypatch):
+    monkeypatch.setattr(app, "api_budget_ok", lambda provider, amount=1: provider != "exa")
+    monkeypatch.setattr(app, "FIRECRAWL_API_KEY", "fc-test")
+    fake = net(lambda r: (200, {"data": [{"title": "B", "url": "https://b.com", "description": "b"}]}))
+    out = app.search_web("cafe Harlem")
+    assert out[0]["provider"] == "firecrawl"
+    assert not any("exa.ai" in c[1] for c in fake.calls)
+
+
+def test_exa_cap_is_enforced_by_the_shared_counter(monkeypatch):
+    monkeypatch.undo()
+    monkeypatch.setattr(app, "_DB_AVAILABLE", True)
+    monkeypatch.setitem(app.API_CALL_LIMITS, "exa", 3)
+    store = {"n": 70}                                     # e.g. already used today elsewhere
+
+    def counter(day, scope, key, kind, amount=1):
+        store["n"] += amount
+        return store["n"]
+    monkeypatch.setattr(app, "increment_usage", counter, raising=False)
+    assert app.api_budget_ok("exa") is False             # 71 > 3: no call, reservation undone
+    assert store["n"] == 70
 
 
 def test_default_exa_cap_fits_the_monthly_credit():
@@ -309,8 +332,41 @@ def test_compare_runs_each_provider_on_the_same_query(net, monkeypatch):
                headers={"X-Agent-Token": app.MASTER_CODE}).get_json()
     row = r["comparisons"][0]
     assert set(row["providers"]) == {"exa", "firecrawl", "serpapi"}
+    assert {p: v["status"] for p, v in row["providers"].items()} == {"exa": "results", "firecrawl": "results", "serpapi": "results"}
     assert row["overlap"]["exa&firecrawl"] == 1
     assert row["only_in"]["exa"] == ["https://a.com"] and row["only_in"]["serpapi"] == ["https://c.com"]
+
+
+@pytest.mark.parametrize("exa_reply,exa_status", [
+    ((500, {"error": "boom"}), "failed"),
+    ("timeout", "failed"),
+    ((200, {"results": []}), "empty"),
+])
+def test_compare_only_counts_successful_searches(net, monkeypatch, exa_reply, exa_status):
+    monkeypatch.setattr(app, "FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setattr(app, "SERP_API_KEY", "")         # serpapi: skipped (no key)
+
+    def handler(request):
+        if "exa.ai" in request.url:
+            if exa_reply == "timeout":
+                raise requests.exceptions.ReadTimeout("read timed out")
+            return exa_reply
+        return 200, {"data": [{"title": "B", "url": "https://b.com", "description": "b"}]}
+
+    net(handler)
+    r = app.app.test_client().post("/dev/search/compare", json={"queries": ["cafe Harlem"]},
+                                   headers={"X-Agent-Token": app.MASTER_CODE}).get_json()
+    row = r["comparisons"][0]
+    st = {p: v["status"] for p, v in row["providers"].items()}
+    assert st == {"exa": exa_status, "firecrawl": "results", "serpapi": "skipped"}
+    if exa_status == "failed":
+        # a failed Exa call must not make Firecrawl's URLs look unique
+        assert row["compared"] == ["firecrawl"] and row["only_in"] == {} and row["overlap"] == {}
+        assert row["not_compared"] == {"exa": "failed", "serpapi": "skipped"}
+    else:
+        # an empty search is a real result: Firecrawl's URL is unique vs Exa
+        assert row["compared"] == ["exa", "firecrawl"]
+        assert row["only_in"] == {"exa": [], "firecrawl": ["https://b.com"]}
 
 
 def test_ai_replies_are_replayed_by_full_request(replay):
