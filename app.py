@@ -211,6 +211,17 @@ except Exception as _intent_import_err:
     print(f"[WARN] intent_service unavailable: {_intent_import_err}", flush=True)
     _INTENT_AVAILABLE = False
 
+# --- DEV REPLAY (testing only, off unless YELHAO_DEV_REPLAY=1) --------------
+try:
+    import replay_service
+    if replay_service.REPLAY_ON:
+        replay_service.install_http_replay()
+        print(f"[Replay] dev replay ON (mode={replay_service.REPLAY_MODE}): "
+              "saved outside replies are reused", flush=True)
+except Exception as _replay_import_err:
+    print(f"[WARN] replay_service unavailable: {_replay_import_err}", flush=True)
+    replay_service = None
+
 app = Flask(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -301,7 +312,40 @@ API_CALL_LIMITS = {
     "tavily":         _env_int("LIMIT_API_TAVILY", 30),
     "scraperapi":     _env_int("LIMIT_API_SCRAPERAPI", 30),
     "geoapify":       _env_int("LIMIT_API_GEOAPIFY", 500),
+    # Exa lite search is $4 per 1,000; 80/day stays inside the $10 monthly credit.
+    "exa":            _env_int("LIMIT_API_EXA", 80),
+    "firecrawl_search": _env_int("LIMIT_API_FIRECRAWL_SEARCH", 20),
 }
+
+
+# Replayed calls cost nothing, so give back the budget reserved before them.
+_REPLAY_BUDGET_BY_URL = (
+    ("api.exa.ai", "", "exa"),
+    ("api.firecrawl.dev", "/search", "firecrawl_search"),
+    ("serpapi.com", "/search", "serpapi"),
+    ("api.tavily.com", "", "tavily"),
+    ("api.scraperapi.com", "", "scraperapi"),
+    ("maps.googleapis.com", "/place/details", "google_details"),
+    ("maps.googleapis.com", "/place/textsearch", "google_search"),
+    ("maps.googleapis.com", "/place/nearbysearch", "google_search"),
+    ("maps.googleapis.com", "/geocode", "google_geocode"),
+    ("api.geoapify.com", "", "geoapify"),
+)
+
+
+def _refund_replayed_call(url: str):
+    try:
+        from urllib.parse import urlparse as _up
+        p = _up(url)
+        host, path = (p.hostname or "").lower(), p.path or ""
+        for h, frag, provider in _REPLAY_BUDGET_BY_URL:
+            if host == h and frag in path:
+                if _DB_AVAILABLE and API_CALL_LIMITS.get(provider, 0) > 0:
+                    from datetime import datetime as _dt, timezone as _tz
+                    increment_usage(_dt.now(_tz.utc).date(), "global", "all", "api_" + provider, -1)
+                return
+    except Exception:
+        pass
 
 
 def api_budget_ok(provider: str, amount: int = 1) -> bool:
@@ -468,12 +512,19 @@ def init_clients():
         gpt_client = OpenAI(api_key=OPENAI_KEY)
     if ANTHROPIC_KEY and not claude_client:
         claude_client = Anthropic(api_key=ANTHROPIC_KEY)
+    if replay_service is not None and replay_service.REPLAY_ON:
+        try:
+            replay_service.on_http_hit = _refund_replayed_call
+            replay_service.wrap_ai_clients(gpt_client, claude_client)
+        except Exception as _e:
+            log_error("replay wrap_ai_clients", _e)
 
 # --- MINIMAL INLINE VERSIONS (replace with full versions from agent_v2.py) --
 
 SCRAPER_API_KEY   = os.environ.get("SCRAPER_API_KEY", "")
 FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY", "")
 TAVILY_API_KEY    = os.environ.get("TAVILY_API_KEY", "")
+EXA_API_KEY       = os.environ.get("EXA_API_KEY", "")
 
 FETCH_CLASSIFICATIONS = {}  # url -> classify_fetch_result output; cleared per request
 def safe_get(url, timeout=10):
@@ -696,15 +747,114 @@ def find_social_links(html):
 
 SERP_API_KEY = os.environ.get("SERP_API_KEY", "")
 
+_SITE_OP = re.compile(r'(?<!\S)(-?)site:(\S+)')
+
+
+def _split_site_operators(query):
+    '''Turn site: and -site: operators into domain lists for Exa.'''
+    include, exclude = [], []
+    for neg, dom in _SITE_OP.findall(query or ""):
+        dom = dom.strip('"\'')
+        (exclude if neg else include).append(dom)
+    clean = _SITE_OP.sub(" ", query or "")
+    clean = re.sub(r'\s+OR\s*$|^\s*OR\s+', ' ', clean)
+    return re.sub(r'\s+', ' ', clean).strip(), include, exclude
+
+
+def exa_search(query, max_results=6):
+    '''
+    Exa web search (lite: $4 per 1,000, highlights included). Returns a list,
+    possibly empty, or None when Exa was not tried (no key or daily cap).
+    site: operators become includeDomains, so off-Google discovery queries
+    (Instagram, Facebook, Reddit, booking sites) keep their domain limits.
+    '''
+    if not EXA_API_KEY or not api_budget_ok("exa"):
+        return None
+    clean, include, exclude = _split_site_operators(query)
+    body = {
+        "query":      clean or query,
+        "type":       "lite",
+        "numResults": max(1, min(int(max_results or 6), 10)),
+        "contents":   {"highlights": True},
+    }
+    if include:
+        body["includeDomains"] = include
+    if exclude:
+        body["excludeDomains"] = exclude
+    try:
+        r = req.post("https://api.exa.ai/search", json=body,
+                     headers={"x-api-key": EXA_API_KEY, "Content-Type": "application/json"},
+                     timeout=12)
+        if r.status_code != 200:
+            print(f"[Search] Exa HTTP {r.status_code} ({r.text[:120]!r}) - falling back", flush=True)
+            return None
+        out = []
+        for res in (r.json().get("results") or [])[:max_results]:
+            hl = res.get("highlights") or []
+            text_body = " ".join(h for h in hl if isinstance(h, str)) or (res.get("text") or "")[:400]
+            out.append({
+                "title":    res.get("title") or "",
+                "url":      res.get("url") or "",
+                "body":     text_body[:600],
+                "provider": "exa",
+            })
+        return out
+    except Exception as e:
+        log_error("Exa search", e, fallback="SerpAPI")
+        return None
+
+
+def firecrawl_search(query, max_results=6):
+    '''Firecrawl search fallback (free monthly credits). List or None.'''
+    if not FIRECRAWL_API_KEY or not api_budget_ok("firecrawl_search"):
+        return None
+    try:
+        r = req.post("https://api.firecrawl.dev/v1/search",
+                     json={"query": query, "limit": max(1, min(int(max_results or 6), 10))},
+                     headers={"Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+                              "Content-Type": "application/json"},
+                     timeout=15)
+        if r.status_code != 200:
+            print(f"[Search] Firecrawl search HTTP {r.status_code} - falling back", flush=True)
+            return None
+        data = r.json().get("data")
+        if isinstance(data, dict):          # newer response shape: {"web": [...]}
+            data = data.get("web") or []
+        out = []
+        for res in (data or [])[:max_results]:
+            out.append({
+                "title":    res.get("title") or "",
+                "url":      res.get("url") or "",
+                "body":     (res.get("description") or res.get("markdown") or "")[:600],
+                "provider": "firecrawl",
+            })
+        return out
+    except Exception as e:
+        log_error("Firecrawl search", e, fallback="DuckDuckGo")
+        return None
+
+
 def search_web(query, max_results=6):
     '''
-    Discovery and operator search. Priority: SerpAPI → DuckDuckGo.
+    Discovery and operator search.
+    Priority: Exa -> Firecrawl search -> SerpAPI -> DuckDuckGo.
+    Each paid step has a daily cap (LIMIT_API_*); over the cap it is skipped.
     Use for: business discovery, site: operators, booking platforms,
              social-indexed queries, official website lookup.
 
-    For review context, press, market mentions — use search_context() instead.
+    For review context, press, market mentions - use search_context() instead.
     '''
-    # -- SerpAPI (Google) — primary for discovery/operators -------------------
+    # -- Exa - primary ----------------------------------------------------------
+    _exa = exa_search(query, max_results)
+    if _exa:
+        return _exa
+
+    # -- Firecrawl search - free monthly credits, before paid SerpAPI ----------
+    _fc = firecrawl_search(query, max_results)
+    if _fc:
+        return _fc
+
+    # -- SerpAPI (Google) - paid fallback for discovery/operators -------------
     if SERP_API_KEY and api_budget_ok("serpapi"):
         try:
             import requests as _req
@@ -737,14 +887,16 @@ def search_web(query, max_results=6):
                 print(f"[Search] SerpAPI HTTP {r.status_code} ({r.text[:150]!r}) - falling back to DDG", flush=True)
         except Exception as e:
             log_error("SerpAPI search", e, fallback="DuckDuckGo")
-    elif not SERP_API_KEY:
-        print(f"[Search] SERP_API_KEY not set - using DDG", flush=True)
     # (when the SerpAPI daily cap is reached, api_budget_ok already logged it)
 
-    # -- DuckDuckGo fallback ---------------------------------------------------
+    # -- DuckDuckGo - last resort -----------------------------------------------
     snippets = []
     if DDGS is None:
         return snippets
+    if replay_service is not None:
+        _saved = replay_service.ddg_get(query, max_results)
+        if _saved is not None:
+            return _saved
     if ddg_cooling_down():
         return snippets  # blocked recently: skip instead of waiting on a timeout
     try:
@@ -756,6 +908,8 @@ def search_web(query, max_results=6):
         log_error("DuckDuckGo search", e, query=query)
         if _is_ddg_block(e):
             start_ddg_cooldown(e)
+    if replay_service is not None:
+        replay_service.ddg_put(query, max_results, snippets)
     return snippets
 
 
@@ -1169,7 +1323,9 @@ def detect_niche_keywords(industry, business_name, website_pages):
     if not matched:
         words = re.findall(r'\b\w+\b', industry.lower()) if industry else []
         matched = [f"{w} trend" for w in words[:2]] + [f"{business_name} trend"]
-    return list(set(matched))[:5]
+    # Keep first-seen order: set() order changes between server restarts,
+    # which changed trend searches run to run.
+    return list(dict.fromkeys(matched))[:5]
 
 
 def scrape_tiktok_trends(keyword):
@@ -6461,14 +6617,37 @@ def health_providers():
         m = claude_client.models.retrieve(CLAUDE_MODEL)
         return {"configured": True, "ok": True, "detail": f"{getattr(m, 'id', CLAUDE_MODEL)} available"}
 
+    def _exa():
+        if not EXA_API_KEY:
+            return {"configured": False, "ok": False, "detail": "EXA_API_KEY not set"}
+        if not api_budget_ok("exa"):
+            return {"configured": True, "ok": None, "detail": "skipped: daily cap reached or turned off"}
+        r = _rq.post("https://api.exa.ai/search",
+                     json={"query": "coffee shop Harlem New York", "type": "lite", "numResults": 1},
+                     headers={"x-api-key": EXA_API_KEY}, timeout=15)
+        n = len((r.json() or {}).get("results", [])) if r.status_code == 200 else 0
+        return {"configured": True, "ok": n > 0, "detail": f"HTTP {r.status_code}, {n} result(s)"}
+
     providers = {
+        "exa": _check(_exa),
         "google_geocoding": _check(_google), "geoapify": _check(_geoapify), "tavily": _check(_tavily),
         "serpapi": _check(_serpapi), "scraperapi": _check(_scraperapi),
         "openai": _check(_openai), "anthropic": _check(_anthropic),
     }
     for name, res in providers.items():
         print(f"  [Providers] {name}: ok={res.get('ok')} {res.get('detail', '')}", flush=True)
-    return jsonify({"ok": True, "providers": providers, "caps": API_CALL_LIMITS})
+    return jsonify({"ok": True, "providers": providers, "caps": API_CALL_LIMITS,
+                    "dev_replay": replay_service.status() if replay_service is not None else {"on": False}})
+
+
+@app.route('/dev/replay/clear', methods=['POST'])
+def dev_replay_clear():
+    """Owner only: forget saved replies so the next runs fetch fresh data."""
+    if get_code_type(request) != "master":
+        return jsonify({"ok": False, "error": "Owner access code required"}), 403
+    if replay_service is None:
+        return jsonify({"ok": False, "error": "replay_service unavailable"}), 503
+    return jsonify({"ok": True, "cleared": replay_service.clear(), "status": replay_service.status()})
 
 
 @app.route('/health/usage', methods=['GET'])
