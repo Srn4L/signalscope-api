@@ -2418,6 +2418,71 @@ function toggleTheme() {
 
 // ── CONFIG ─────────────────────────────────────────────────────────────────
 const PROXY_URL = 'https://signalscope-api.onrender.com';
+
+// Dev replay (owner testing only). Open yelhao.com/?replay=all to capture a
+// run, ?replay=saved to rerun it from saved data only, ?replay=ai to keep AI
+// replies but run searches live, ?replay=off to stop. It adds an X-Replay
+// header to backend calls; the backend ignores it unless the request carries
+// the owner code and the server allows replay. Other users are always live.
+// The badge shows what the SERVER reports it did, not only what was asked.
+(function () {
+  let mode = null;
+  try {
+    const q = new URLSearchParams(location.search).get('replay');
+    if (q === 'off') localStorage.removeItem('yelhao_replay');
+    else if (q === 'ai' || q === 'all' || q === 'saved') localStorage.setItem('yelhao_replay', q);
+    mode = localStorage.getItem('yelhao_replay');
+  } catch (e) {}
+  if (mode !== 'ai' && mode !== 'all' && mode !== 'saved') return;
+  let badge = null, serverMode = null, lastRun = null;
+  const label = { all: 'capture', saved: 'saved data only', ai: 'AI replay' };
+  const paint = () => {
+    if (!badge) return;
+    let t = 'Replay asked: ' + (label[mode] || mode);
+    if (serverMode === null) t += ' · server: no reply yet';
+    else if (serverMode !== mode) t += ' · server: NOT APPLIED (' + serverMode + ')';
+    else t += ' · server: on';
+    if (lastRun) t += ' · last run: ' + lastRun.live_calls + ' live, ' + lastRun.replayed_calls +
+      ' replayed' + (lastRun.missing_count ? ', ' + lastRun.missing_count + ' missing' : '');
+    badge.textContent = t;
+    badge.style.background = (serverMode !== null && serverMode !== mode) || (mode === 'saved' && lastRun && lastRun.live_calls)
+      ? '#e5484d' : '#e8b21e';
+  };
+  const noteRun = (body) => {
+    const r = body && (body.replay_run || (body.result && body.result.replay_run));
+    if (r) { lastRun = r; paint(); }
+  };
+  const _fetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (!url.startsWith(PROXY_URL)) return _fetch(input, init);
+    init = Object.assign({}, init || {});
+    const h = new Headers(init.headers || {});
+    h.set('X-Replay', mode);
+    init.headers = h;
+    return _fetch(input, init).then(res => {
+      try {
+        const eff = res.headers.get('X-Replay-Effective');
+        serverMode = eff || 'not allowed on server';
+        paint();
+        if ((res.headers.get('Content-Type') || '').includes('json')) {
+          res.clone().json().then(noteRun).catch(() => {});
+        }
+      } catch (e) {}
+      return res;
+    });
+  };
+  const showBadge = () => {
+    badge = document.createElement('div');
+    badge.id = 'replayBadge';
+    badge.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:9999;font:600 10px/1.3 sans-serif;' +
+      'padding:5px 8px;border-radius:4px;background:#e8b21e;color:#111;opacity:.9;pointer-events:none;max-width:90vw;';
+    document.body.appendChild(badge);
+    paint();
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', showBadge);
+  else showBadge();
+})();
 const $ = id => document.getElementById(id);
 
 // ── ACCESS GATE ────────────────────────────────────────────────────────────
@@ -4230,7 +4295,7 @@ function pollDeepAnalysis(jobId) {
       } else if (data.status === 'error') {
         clearInterval(_pollInterval);
         if (_pendingAnalysis) {
-          failPendingAnalysis('The analysis could not finish. Try again in a moment.');
+          failPendingAnalysis(data.replay_missing ? data.error : 'The analysis could not finish. Try again in a moment.');
           console.warn('Deep analysis error:', data.error);
           return;
         }
@@ -4678,6 +4743,13 @@ async function runProspect(niche, location, mode, goal, _inferred) {
     }
 
     const data = await res.json();
+    if (res.status === 409 && (data.replay_missing || data.replay_refused)) {
+      // Owner "saved data only" run: nothing was sent live; show what's missing
+      // or why saved mode couldn't be used
+      errBox.textContent = data.error;
+      errBox.classList.add('on');
+      return;
+    }
     if (!data.results || data.results.length === 0) {
       results.innerHTML = '<div class="prospect-empty">No results found for this query. Try a different niche or location.</div>';
       return;
