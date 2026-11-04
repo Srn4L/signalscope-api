@@ -5777,6 +5777,7 @@ def search_geoapify(niche, location, limit=10):
             name  = props.get("name", "").strip()
             if not name or len(name) < 3:
                 continue
+            raw_tags = ((props.get("datasource") or {}).get("raw") or {})
             results.append({
                 "business_name": name,
                 "website":       props.get("website", ""),  # No website = empty
@@ -5786,6 +5787,10 @@ def search_geoapify(niche, location, limit=10):
                 "address":       props.get("formatted", ""),
                 "rating":        0,
                 "review_count":  0,
+                # Type evidence for query matching (see geoapify_query_match)
+                "geo_categories": [c for c in (props.get("categories") or []) if isinstance(c, str)],
+                "osm_tags":      {k: str(v) for k, v in raw_tags.items()
+                                  if k in ("shop", "beauty", "amenity", "leisure", "craft", "cuisine", "healthcare")},
             })
         print(f"  -> Geoapify: {len(results)} results (category={category})")
         return results
@@ -5794,6 +5799,143 @@ def search_geoapify(niche, location, limit=10):
         return []
 
 
+
+
+# --- Geoapify: use the user's words to rank the fallback ---------------------
+# Geoapify has no ratings or reviews and broad categories (a nail-salon Scout
+# gets every beauty business), so without help its cards tie and fall to the
+# alphabetical tiebreaker. These helpers read business-type words from the
+# niche and the search text and check them against each place's name and its
+# OpenStreetMap tags. Intent is a boost, not a filter: a clear other-type
+# place (a barber in a nail search) is ranked lower, never removed.
+
+# Business-type words and the words that count as the same type.
+QUERY_TYPE_TERMS = {
+    "nail":     ("nail", "nails", "manicure", "pedicure", "mani", "pedi"),
+    "lash":     ("lash", "lashes", "eyelash", "eyelashes"),
+    "brow":     ("brow", "brows", "eyebrow", "eyebrows", "threading"),
+    "wax":      ("wax", "waxing"),
+    "hair":     ("hair", "hairdresser", "hairstylist", "blowout", "braid", "braids", "locs"),
+    "barber":   ("barber", "barbers", "barbershop"),
+    "massage":  ("massage",),
+    "spa":      ("spa", "medspa", "day spa"),
+    "tattoo":   ("tattoo", "tattoos"),
+    "tanning":  ("tanning", "tan"),
+    "makeup":   ("makeup", "make-up", "mua"),
+    "cafe":     ("cafe", "coffee", "espresso"),
+    "bakery":   ("bakery", "bakeries", "bake", "pastry", "patisserie"),
+    "pizza":    ("pizza", "pizzeria"),
+    "gym":      ("gym", "fitness"),
+    "yoga":     ("yoga",),
+    "pilates":  ("pilates",),
+    "dental":   ("dentist", "dental", "orthodontist", "orthodontics"),
+}
+# Words too broad to identify a type on their own.
+QUERY_GENERIC_TERMS = ("salon", "salons", "beauty", "studio", "shop", "parlor", "parlour", "lounge", "bar")
+
+# OpenStreetMap tag values (and Geoapify category endings) per type.
+_TYPE_TAG_VALUES = {
+    "nail":    {"beauty": ("nails",), "shop": ("nails",)},
+    "lash":    {"beauty": ("lashes", "eyelashes")},
+    "brow":    {"beauty": ("eyebrows", "brows")},
+    "wax":     {"beauty": ("waxing",)},
+    "hair":    {"shop": ("hairdresser",), "category": ("hairdresser",)},
+    "barber":  {"shop": ("barber",), "category": ("hairdresser",)},
+    "massage": {"shop": ("massage",), "category": ("massage",)},
+    "spa":     {"leisure": ("spa",), "beauty": ("spa",), "category": ("spa",)},
+    "tattoo":  {"shop": ("tattoo",), "category": ("tattoo",)},
+    "tanning": {"beauty": ("tanning",), "category": ("tanning_salon",)},
+    "cafe":    {"amenity": ("cafe",), "category": ("cafe",)},
+    "bakery":  {"shop": ("bakery",)},
+    "pizza":   {"cuisine": ("pizza",)},
+    "gym":     {"leisure": ("fitness_centre",), "category": ("fitness",)},
+    "dental":  {"amenity": ("dentist",), "healthcare": ("dentist",), "category": ("dentist",)},
+}
+
+
+def _words(text):
+    return re.findall(r"[a-z]+(?:-[a-z]+)?", (text or "").lower())
+
+
+def query_type_terms(niche, raw_query=""):
+    """Business types named in the niche or search text, e.g. {"nail"}.
+    Words like "weak digital presence" or place names are ignored."""
+    words = set(_words(niche) + _words(raw_query))
+    joined = " " + " ".join(_words(niche) + _words(raw_query)) + " "
+    found = set()
+    for t, variants in QUERY_TYPE_TERMS.items():
+        if any((v in words) if " " not in v else (f" {v} " in joined) for v in variants):
+            found.add(t)
+    return found
+
+
+def _place_types(c):
+    """Types a place is tagged as, from OpenStreetMap tags and Geoapify categories."""
+    tags = c.get("osm_tags") or {}
+    cat_ends = {str(x).rsplit(".", 1)[-1] for x in (c.get("geo_categories") or [])}
+    found = set()
+    for t, rules in _TYPE_TAG_VALUES.items():
+        for field, values in rules.items():
+            if field == "category":
+                if cat_ends & set(values):
+                    found.add(t)
+            else:
+                tag_vals = {v.strip() for v in str(tags.get(field, "")).lower().split(";")}
+                if tag_vals & set(values):
+                    found.add(t)
+    return found
+
+
+def geoapify_query_match(candidate, terms):
+    """
+    How well a Geoapify place fits the business types the user asked for.
+    Returns {"level": "tag"|"name"|"other_type"|"unknown", "terms": [...],
+    "reason": str}. "tag" = OpenStreetMap lists it as that type; "name" = the
+    type word is in its name (inferred); "other_type" = tagged as a different
+    type and the name doesn't say otherwise; "unknown" = no evidence either way.
+    """
+    if not terms:
+        return {"level": "unknown", "terms": [], "reason": ""}
+    name_words = set(_words(candidate.get("business_name")))
+    place_types = _place_types(candidate)
+    tag_hits = sorted(terms & place_types)
+    if tag_hits:
+        return {"level": "tag", "terms": tag_hits,
+                "reason": f"Listed as {', '.join(tag_hits)} on OpenStreetMap, matching your search"}
+    name_hits = sorted(t for t in terms if name_words & set(QUERY_TYPE_TERMS[t]))
+    if name_hits:
+        return {"level": "name", "terms": name_hits,
+                "reason": f"Name mentions {', '.join(name_hits)} (inferred from the name)"}
+    other = sorted(place_types - terms)
+    if other:
+        return {"level": "other_type", "terms": other,
+                "reason": f"Listed as {', '.join(other)} on OpenStreetMap, not {', '.join(sorted(terms))}"}
+    return {"level": "unknown", "terms": [],
+            "reason": "Type not confirmed: listed only under a broad category"}
+
+
+# Ranking influence for Geoapify cards (score points; not a filter).
+GEOAPIFY_MATCH_ADJUST = {"tag": 12, "name": 10, "unknown": 0, "other_type": -12}
+_MATCH_TIER = {"tag": 0, "name": 0, "unknown": 1, "other_type": 2}
+
+
+def apply_geoapify_query_match(scored, niche, raw_query):
+    """Annotate Geoapify cards with query_match and adjust their score."""
+    terms = query_type_terms(niche, raw_query)
+    if not terms:
+        return
+    for b in scored:
+        if (b.get("source") or b.get("platform")) != "geoapify":
+            continue
+        m = geoapify_query_match(b, terms)
+        b["query_match"] = m
+        adj = GEOAPIFY_MATCH_ADJUST.get(m["level"], 0)
+        if adj:
+            b["opportunity_score"] = max(0, min(100, (b.get("opportunity_score") or 0) + adj))
+        if m["reason"]:
+            impact = {"tag": "positive", "name": "positive", "other_type": "negative"}.get(m["level"], "neutral")
+            b["score_reasons"] = [{"signal": m["reason"], "impact": impact, "weight": "high",
+                                   "key": "query_match"}] + list(b.get("score_reasons") or [])
 
 
 # --- LOCATION-AWARE COMPETITOR INTELLIGENCE -----------------------------------
@@ -6543,12 +6685,19 @@ def prospect():
         biz.update(score_data)
         scored.append(biz)
 
+    # Geoapify fallback: the user's own words decide which places fit
+    try:
+        apply_geoapify_query_match(scored, niche, raw_query)
+    except Exception as _qm_err:
+        log_error("geoapify query match", _qm_err)
+
     # Sort by opportunity_score first, then by quality tiebreakers so
     # identical scores produce a meaningful ranking instead of clustering.
-    # Tiebreakers: higher rating wins, then higher review_count, then
-    # alphabetical name (neutral deterministic fallback).
+    # Tiebreakers: places matching the searched type, higher rating, higher
+    # review_count, then alphabetical name (neutral deterministic fallback).
     scored.sort(key=lambda x: (
         -x["opportunity_score"],
+        _MATCH_TIER.get((x.get("query_match") or {}).get("level"), 1),
         -(x.get("rating") or 0),
         -(x.get("review_count") or 0),
         (x.get("business_name") or "").lower(),
@@ -6713,6 +6862,8 @@ def prospect():
             # Social and booking are never looked up for Google cards in Scout.
             "social_checked":      b.get("social_checked", True),
             "booking_checked":     b.get("booking_checked", True),
+            # Geoapify only: how the place fits the searched type, and why
+            "query_match":         b.get("query_match"),
         }
         if b.get("refresh_metadata"):
             card["refresh_metadata"] = b["refresh_metadata"]
