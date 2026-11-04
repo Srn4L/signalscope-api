@@ -258,6 +258,10 @@ CLAUDE_MODEL = (os.environ.get("CLAUDE_MODEL") or "claude-sonnet-5-5").strip()
 # GPT models are env-configurable so cheaper models can be tried without a code change.
 # GPT_FAST_MODEL: fast analysis. GPT_HELPER_MODEL: deep pipeline extract and validate steps.
 GPT_FAST_MODEL = (os.environ.get("GPT_FAST_MODEL") or "gpt-4o").strip()
+# Single-business Analyze runs one analysis (the deep pipeline). Set
+# ANALYZE_FAST_PASS=1 to bring back the quick GPT preview before it.
+# Batch analysis of several businesses always uses the quick pass.
+ANALYZE_FAST_PASS = (os.environ.get("ANALYZE_FAST_PASS") or "").strip() == "1"
 GPT_HELPER_MODEL = (os.environ.get("GPT_HELPER_MODEL") or "gpt-4o").strip()
 
 
@@ -2413,7 +2417,7 @@ def notify_n8n_after_analyze(business_name, location, report, opp_score, opp_con
 def run_deep_job(job_id, business_name, location, website_pages, social_text,
                  review_text, pricing_text, competitors, mode,
                  booking_cards, trend_data, ck, social_links=None, manual_email='',
-                 objective_mode=None):
+                 objective_mode=None, extra_report_fields=None):
     '''
     Runs in a background thread. Executes the full pipeline and stores result in JOBS.
     Also updates the cache when done.
@@ -2437,6 +2441,9 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
         report["_pipeline_mode"]   = mode           # AI routing: multi_model / claude_only / gpt_only
         report["objective_mode"]   = objective_mode  # Scout intent: outreach / referral / etc. (may be None)
         report["_complexity_score"] = compute_complexity(website_pages, social_text, review_text, competitors, social_links)
+        # Backend intelligence computed in /agent (signals, contact path, v2 score)
+        for _k, _v in (extra_report_fields or {}).items():
+            report.setdefault(_k, _v)
 
         data_quality    = build_data_quality(website_pages, social_text, review_text, competitors)
         report          = verify_fast_report(report, social_text, data_quality, social_links)
@@ -3071,13 +3078,23 @@ def agent():
         else:
             social_text["user_provided"] = f"[USER-PROVIDED CONTENT - highest confidence]:\n{user_content}"
 
-    # -- FAST RESPONSE - run GPT immediately, return to user -------------------
-    try:
-        fast_report = run_fast_pipeline(business_name, location, website_pages, social_text, social_links, gp_context=discovery_metadata)
-        fast_report = verify_fast_report(fast_report, social_text, build_data_quality(website_pages, social_text, "", []), social_links)
-        fast_report["company"] = business_name
-    except Exception as e:
-        fast_report = {"company": business_name, "error": str(e), "overall_score": 0}
+    # -- One analysis: the deep pipeline below writes the report. ---------------
+    # The first response carries only backend-computed evidence, no AI score.
+    if ANALYZE_FAST_PASS:
+        try:
+            fast_report = run_fast_pipeline(business_name, location, website_pages, social_text, social_links, gp_context=discovery_metadata)
+            fast_report = verify_fast_report(fast_report, social_text, build_data_quality(website_pages, social_text, "", []), social_links)
+            fast_report["company"] = business_name
+        except Exception as e:
+            fast_report = {"company": business_name, "error": str(e), "overall_score": 0}
+    else:
+        fast_report = {
+            "company":          business_name,
+            "industry":         industry or "",
+            "analysis_pending": True,
+            "overall_score":    None,
+            "coverage_notes":   "Full analysis running.",
+        }
 
     # -- DEEP ANALYSIS - run in background thread ------------------------------
     job_id = str(uuid.uuid4())[:8]
@@ -3253,12 +3270,11 @@ def agent():
             run_deep_job(job_id, business_name, location, pages, local_social,
                         review_text, pricing_text, competitors, mode,
                         booking_cards, trend_data, ck, _social_links,
-                        manual_email=manual_email, objective_mode=objective_mode)
+                        manual_email=manual_email, objective_mode=objective_mode,
+                        extra_report_fields=intel_fields)
         except Exception as e:
             JOBS[job_id] = {"status": "error", "error": str(e), "ts": time.time()}
             print(f"  [X] Deep work failed: {e}")
-
-    Thread(target=deep_work, daemon=True).start()
 
     # -- Intelligence layer injection (Phase 6) --------------------------------
     # Wraps in try/except so Analyze NEVER fails if this layer errors.
@@ -3360,11 +3376,25 @@ def agent():
         except Exception as _intel_err:
             log_error("/agent intelligence layer", _intel_err, business_name=business_name)
 
-    # -- Return fast report immediately ----------------------------------------
+    # Backend-computed intelligence fields carry into the deep report, so the
+    # one report the user sees keeps them. Start the deep job only now.
+    intel_fields = {
+        k: fast_report[k] for k in (
+            "opportunity_signals", "contact_intelligence", "social_conversion",
+            "business_value", "opportunity_score_v2", "discovery_verification",
+            "niche_intelligence",
+        ) if k in fast_report
+    }
+    Thread(target=deep_work, daemon=True).start()
+
+    # -- Return immediately; the frontend polls /job/<id> -----------------------
     fast_brain = {
         "complexity_score": 0,
-        "pipeline_mode":    "fast",
-        "routing_reasons":  [f"Fast analysis complete - enhancing with full intelligence (job: {job_id})"],
+        "pipeline_mode":    "fast" if ANALYZE_FAST_PASS else "deep_pending",
+        "routing_reasons":  [
+            f"Fast analysis complete - enhancing with full intelligence (job: {job_id})"
+            if ANALYZE_FAST_PASS else f"Full analysis running (job: {job_id})"
+        ],
         "data_quality":     build_data_quality(website_pages, social_text, "", []),
         "booking_competitors": [],
         "trend_intelligence":  None,
@@ -6282,6 +6312,9 @@ def prospect():
             "phone":               b.get("phone") or "",
             "website_checked":     b.get("website_checked", True),
             "website_fact":        b.get("website_fact", ""),
+            # Social and booking are never looked up for Google cards in Scout.
+            "social_checked":      b.get("social_checked", True),
+            "booking_checked":     b.get("booking_checked", True),
         }
         if b.get("refresh_metadata"):
             card["refresh_metadata"] = b["refresh_metadata"]
@@ -7021,8 +7054,12 @@ def _run_batch_item(item: dict, niche: str = "") -> dict:
             result["key_insight"]  = "No website found — signal scan skipped."
             return result
 
-        # Fast pipeline (not deep — label clearly on frontend)
-        report = run_fast_pipeline(name, location, {website: extract_text(*safe_get(website) or ("",""))}, {}, "", "", [], "gpt_only")
+        # Quick pass (not deep - label clearly on frontend). The old call passed
+        # 8 arguments to a 6-argument function, so every batch row errored.
+        _html, _ = safe_get(website)
+        _pages = {website: extract_text(_html, 3000)} if _html else {}
+        report = run_fast_pipeline(name, location, _pages, {})
+        result["analysis_type"] = "quick"
         result.update({
             "batch_status":     "done",
             "overall_score":    report.get("overall_score"),

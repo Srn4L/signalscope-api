@@ -312,10 +312,21 @@ def infer_best_contact_path(
         if phone:
             best = phone
             contact_target = "owner_or_manager (inferred)"
-            contact_reason = (
-                "No website detected - phone is the most direct path to the owner "
-                "for a business without an active digital presence."
-            )
+            if business.get("website_checked") is False:
+                contact_reason = (
+                    "Website not checked yet - the listed phone is the most "
+                    "direct known path to the owner."
+                )
+            elif business.get("website_checked") is True:
+                contact_reason = (
+                    "No website on the Google listing - the listed phone is the "
+                    "most direct known path to the owner."
+                )
+            else:
+                contact_reason = (
+                    "No website detected - phone is the most direct path to the owner "
+                    "for a business without an active digital presence."
+                )
 
     # ── Rule 6: best available ────────────────────────────────────────────
     if not best and candidates:

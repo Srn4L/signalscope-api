@@ -285,7 +285,37 @@ def build_social_conversion_signals(
         "retention":   retention_score,
         "platform":    platform_score,
     }
-    main_leak = min(scores_map, key=scores_map.get)
+    # Scout cards say which fields were looked up. A field that was not
+    # looked up is not evidence of absence, so it must not drive a weak
+    # spot, a fix or a score. Callers without these flags are unchanged.
+    _unchecked = set()
+    if business.get("social_checked") is False and social_count == 0:
+        _unchecked.add("social")
+    if business.get("website_checked") is False and not has_web:
+        _unchecked.add("website")
+    if business.get("booking_checked") is False and not has_booking:
+        _unchecked.add("booking")
+    _dim_inputs = {
+        "attention":   {"social"},
+        "content_fit": {"social"},
+        "intent":      {"website", "booking"},
+        "funnel":      {"website", "booking"},
+        "conversion":  {"website", "booking"},
+        "platform":    {"social", "website"} if user_role else set(),
+    }
+    _unchecked_dims = {d for d, ins in _dim_inputs.items() if ins & _unchecked}
+
+    if _unchecked_dims:
+        # Only weak spots built from checked inputs count. Retention and
+        # platform (without a role) are base assumptions, not evidence.
+        leak_pool = {
+            k: v for k, v in scores_map.items()
+            if k not in _unchecked_dims and k != "retention"
+            and (k != "platform" or user_role) and v < 50
+        }
+    else:
+        leak_pool = scores_map
+    main_leak = min(leak_pool, key=leak_pool.get) if leak_pool else None
 
     fix_map = {
         "attention":   "Start a consistent Instagram or TikTok presence to build top-of-funnel awareness.",
@@ -300,9 +330,18 @@ def build_social_conversion_signals(
 
     # ── Creator angle + business value ───────────────────────────────────
     creator_angle = _infer_creator_angle(business, context)
-    business_value = _short_business_value(business, context, scores_map)
+    business_value = _short_business_value(business, context, leak_pool)
 
-    return {
+    _unchecked_txt = ", ".join(sorted(_unchecked))
+    if main_leak:
+        recommended_fix = fix_map[main_leak]
+    else:
+        recommended_fix = (
+            f"No weak spot found in what was checked. Not checked yet: {_unchecked_txt}. "
+            "Analyze looks these up."
+        )
+
+    result = {
         "attention_signal":       {"score": attention_score,  "evidence": attention_evidence,  "plain_english": attention_pe},
         "intent_signal":          {"score": intent_score,     "evidence": intent_evidence,      "plain_english": intent_pe},
         "trust_signal":           {"score": trust_score,       "evidence": f"{rating}★ · {rev_count} reviews", "plain_english": trust_pe},
@@ -311,11 +350,29 @@ def build_social_conversion_signals(
         "content_market_fit_signal": {"score": content_score, "evidence": "content gap" if needs_content else "no gap flagged", "plain_english": content_pe},
         "retention_signal":       {"score": retention_score,  "evidence": "loyalty/email detected" if has_loyalty else "no retention system detected", "plain_english": retention_pe},
         "platform_fit_signal":    {"score": platform_score,   "evidence": f"Social platforms: {social_count}", "plain_english": platform_pe},
-        "main_conversion_leak":   main_leak,
-        "recommended_fix":        fix_map[main_leak],
+        "main_conversion_leak":   main_leak or "not_enough_checked",
+        "recommended_fix":        recommended_fix,
         "creator_angle":          creator_angle,
         "business_value":         business_value,
+        "unchecked_fields":       sorted(_unchecked),
     }
+
+    # Unchecked dimensions: neutral score (both scorers treat a missing
+    # signal as 50), labeled not checked, no absence wording.
+    _dim_keys = {
+        "attention": "attention_signal", "content_fit": "content_market_fit_signal",
+        "intent": "intent_signal", "funnel": "funnel_clarity_signal",
+        "conversion": "conversion_path_signal", "platform": "platform_fit_signal",
+    }
+    for d in _unchecked_dims:
+        missing = sorted(_dim_inputs[d] & _unchecked)
+        result[_dim_keys[d]] = {
+            "score": 50,
+            "checked": False,
+            "evidence": "Not checked: " + ", ".join(missing),
+            "plain_english": "Not checked yet (" + ", ".join(missing) + "). Analyze looks this up.",
+        }
+    return result
 
 
 def _infer_creator_angle(business: dict, context: dict) -> str:
@@ -339,6 +396,11 @@ def _infer_creator_angle(business: dict, context: dict) -> str:
 
 def _short_business_value(business: dict, context: dict, scores: dict) -> str:
     niche = (context.get("niche") or business.get("category") or "this business").title()
+    if not scores:
+        return (
+            f"{niche}: no weak spot found in the checked evidence yet. "
+            "Analyze checks website, social and booking before naming one."
+        )
     weak  = min(scores, key=scores.get)
     weak_label = {
         "attention": "low visibility",
@@ -408,7 +470,10 @@ def build_business_value_insights(
 
     return {
         "value_summary": f"{user_role.title()} + {niche}: bridging a {service_angle.replace('_', ' ')} gap.",
-        "plain_english_value": _short_business_value(business, context, {k: 50 for k in ["attention","intent","trust","funnel","conversion","content_fit","retention","platform"]}),
+        # Use the weak spot computed from this business's signals. The old
+        # all-50 map always picked "attention", so every business read
+        # "low visibility".
+        "plain_english_value": signals.get("business_value") or _short_business_value(business, context, {}),
         "customer_acquisition_angle": f"Reaching new customers who are searching or scrolling but not finding {niche} yet.",
         "customer_retention_angle":   f"Giving existing customers a reason to come back and bring others.",
         "repeat_visit_angle":         f"Creating content or systems that remind past customers about {niche}.",
@@ -612,7 +677,8 @@ def _collect_risk_flags(business: dict, saturation: dict | None, social_conv: di
     rating = _rating(business)
     if 0 < rating < 3.5:
         flags.append("Low review rating — approach with care and avoid leading with reputation management angle without context.")
-    if not _has_social(business) and not _has_website(business):
+    if (not _has_social(business) and not _has_website(business)
+            and not (social_conv or {}).get("unchecked_fields")):
         flags.append("No online presence detected — data quality is low. Verify the business is still active before outreach.")
     return flags
 
