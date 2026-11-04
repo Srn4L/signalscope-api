@@ -320,7 +320,8 @@ def _scout_exposure_inputs(scored, token_hash, niche, location):
 
 
 # Routes that always call providers live; they can never honor saved-only replay.
-_ALWAYS_LIVE_PREFIXES = ("/health", "/dev/search/compare")
+# (Plain /health is a liveness ping that calls no provider, so it is not listed.)
+_ALWAYS_LIVE_PREFIXES = ("/health/providers", "/dev/search/compare")
 
 
 def _saved_replay_refusal():
@@ -331,8 +332,8 @@ def _saved_replay_refusal():
     """
     if (request.headers.get("X-Replay") or "").strip().lower() != "saved":
         return None
-    if request.method == "OPTIONS":
-        return None                                   # CORS preflight carries no work
+    if request.method == "OPTIONS" or request.path == "/health":
+        return None                                   # preflight and liveness ping do no work
     if any(request.path.startswith(p) for p in _ALWAYS_LIVE_PREFIXES):
         return "always_live_route"
     if replay_service is None or not replay_service.REPLAY_ON:

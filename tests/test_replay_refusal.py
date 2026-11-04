@@ -191,3 +191,12 @@ def test_other_header_values_are_not_refused(rec, monkeypatch, replay):
     monkeypatch.setattr(rs, "REPLAY_ON", False)
     r = _post("/agent", AGENT_BODY, "not-a-code", replay=replay)
     assert r.status_code == 401                                  # same as no header
+
+
+def test_plain_health_ping_is_never_refused(rec, monkeypatch):
+    monkeypatch.setattr(rs, "REPLAY_ON", True)
+    c = app.app.test_client()
+    for token in (app.MASTER_CODE, "", "not-a-code"):
+        r = c.get("/health", headers={"X-Replay": "saved", "X-Agent-Token": token})
+        assert r.status_code == 200 and r.get_json()["status"] == "ok"
+    assert rec.http == [] and rec.ai == []
