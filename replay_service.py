@@ -1,34 +1,35 @@
 """
-replay_service.py - Dev replay for Yelhao.
+replay_service.py - Dev replay for Yelhao (owner test requests only).
 
 While building and testing, the same businesses get analyzed again and again,
 and every run pays for the same outside calls (Google, Exa, SerpAPI, page
-fetches, GPT, Claude). With YELHAO_DEV_REPLAY=1, the first successful reply to
-each outside call is saved, and later identical calls reuse it for free.
+fetches, GPT, Claude). Replay saves the first successful reply to each call
+and reuses it for later identical calls.
 
-Off by default. Turn it off before real users arrive: replayed data does not
-change, so fresh facts (hours, reviews, posts) would not show up.
+Who gets replay: nobody by default. YELHAO_DEV_REPLAY=1 on the server only
+ALLOWS it. A request then opts in with the header  X-Replay: all  or
+X-Replay: ai , and only when it carries the owner (master) code. Every other
+request, including every request from other users, runs fully live. The
+choice is carried into the background threads a request starts (deep
+analysis, batch, parallel fetches), so a whole run uses one mode.
 
-Modes (YELHAO_DEV_REPLAY):
-  1 or all  everything below is replayed. Use it to test a code change on
-            frozen inputs: same evidence in, so any change in the output
-            comes from the code.
-  ai        only GPT and Claude replies are replayed; every search and page
-            fetch is live. Use it to measure search quality and run-to-run
-            differences while not paying again for identical AI prompts.
-  off       (default) nothing is replayed.
-One request can skip replay with the header  X-Replay: off  for a fully live
-run, without changing the setting.
+Modes (per request):
+  all  searches, Places, page fetches, DuckDuckGo and AI replies are reused.
+       Use it to test a code change on frozen inputs.
+  ai   only GPT and Claude replies are reused; searches and fetches are live.
+       Use it to measure search quality while not paying again for an
+       identical AI prompt. Changed evidence makes a new prompt, so the AI
+       call is live then too.
+  off  (no header) fully live.
 
-What is replayed:
+What can be replayed:
 - GET requests made with `requests` (search APIs, Google Places, web pages)
 - POST requests to search and scrape APIs only (Exa, Firecrawl, Tavily)
 - GPT and Claude replies (by model + full prompt + settings)
 - DuckDuckGo results (by query)
 
 Never replayed: CRM writes (HubSpot, Salesforce, Airtable) or any other POST,
-failed replies (4xx/5xx), and anything during /health requests, so provider
-checks always hit the real service.
+failed replies (4xx/5xx), and /health requests.
 
 Storage: memory first, then a small Postgres table (dev_replay_cache) created
 on first use, so replays survive deploys. If the database is unavailable,
@@ -38,6 +39,7 @@ memory only.
 from __future__ import annotations
 
 import base64
+import contextvars
 import hashlib
 import json
 import os
@@ -46,10 +48,50 @@ import threading
 import time
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-_MODE_RAW = (os.environ.get("YELHAO_DEV_REPLAY") or "").strip().lower()
-REPLAY_MODE = "all" if _MODE_RAW in ("1", "all", "true", "on") else ("ai" if _MODE_RAW == "ai" else "off")
-REPLAY_ON = REPLAY_MODE != "off"
-HTTP_REPLAY_ON = REPLAY_MODE == "all"     # searches, Places, page fetches, DuckDuckGo
+_ALLOW_RAW = (os.environ.get("YELHAO_DEV_REPLAY") or "").strip().lower()
+# Server-level permission only. Nothing is replayed unless a request opts in.
+REPLAY_ON = _ALLOW_RAW in ("1", "true", "on", "allow", "all", "ai")
+REPLAY_MODE = "owner_opt_in" if REPLAY_ON else "off"
+
+# Per-request mode: "off", "ai" or "all". Set for every request by
+# set_request_mode(); copied into background threads by carry().
+_REQ_MODE: contextvars.ContextVar = contextvars.ContextVar("yelhao_replay_mode", default="off")
+
+
+def mode_from_header(header_value, is_owner: bool) -> str:
+    v = (header_value or "").strip().lower()
+    if not REPLAY_ON or not is_owner or v not in ("ai", "all"):
+        return "off"
+    return v
+
+
+def set_request_mode(mode: str):
+    """Call at the start of EVERY request (worker threads are reused)."""
+    _REQ_MODE.set(mode if mode in ("ai", "all") else "off")
+
+
+def current_mode() -> str:
+    return _REQ_MODE.get()
+
+
+def carry(fn):
+    """
+    Wrap fn so it runs with the caller's replay mode, in any thread.
+    Threads and thread pools do not inherit context variables on their own.
+    """
+    ctx = contextvars.copy_context()
+
+    def run(*args, **kwargs):
+        return ctx.copy().run(fn, *args, **kwargs)
+    return run
+
+
+def _http_active() -> bool:
+    return REPLAY_ON and _REQ_MODE.get() == "all" and not _bypass()
+
+
+def _ai_active() -> bool:
+    return REPLAY_ON and _REQ_MODE.get() in ("ai", "all") and not _bypass()
 try:
     REPLAY_TTL_SECONDS = int(os.environ.get("REPLAY_TTL_DAYS") or 14) * 86400
 except Exception:
@@ -183,18 +225,16 @@ def clear() -> int:
 
 
 def status() -> dict:
-    return {"on": REPLAY_ON, "mode": REPLAY_MODE, "ttl_days": REPLAY_TTL_SECONDS // 86400, **STATS,
+    return {"allowed": REPLAY_ON, "who": "owner requests with X-Replay: ai|all",
+            "ttl_days": REPLAY_TTL_SECONDS // 86400, **STATS,
             "in_memory": len(_MEM)}
 
 
 def _bypass() -> bool:
-    """Health checks and requests sent with X-Replay: off reach the real service."""
+    """Provider health checks always reach the real service."""
     try:
         from flask import has_request_context, request
-        if not has_request_context():
-            return False
-        return (request.path.startswith("/health")
-                or (request.headers.get("X-Replay") or "").strip().lower() == "off")
+        return has_request_context() and request.path.startswith("/health")
     except Exception:
         return False
 
@@ -241,7 +281,7 @@ def install_http_replay():
                       proxies=proxies, hooks=hooks, stream=stream, verify=verify,
                       cert=cert, json=json)
         m = (method or "GET").upper()
-        if not HTTP_REPLAY_ON or files or stream or _bypass() or not _replayable(m, url):
+        if files or stream or not _http_active() or not _replayable(m, url):
             return original(self, method, url, **kwargs)
 
         body = data if isinstance(data, (str, bytes, type(None))) else _strip_secrets(data)
@@ -312,7 +352,7 @@ def _wrap(resource, kind, model_type):
     original = resource.create
 
     def create(*args, **kwargs):
-        if _bypass() or kwargs.get("stream"):
+        if not _ai_active() or kwargs.get("stream"):
             return original(*args, **kwargs)
         key = make_key(kind, kwargs)
         saved = get(key)
@@ -337,7 +377,7 @@ def _wrap(resource, kind, model_type):
 # ── DuckDuckGo ──────────────────────────────────────────────────────────────
 
 def ddg_get(query: str, max_results: int):
-    if not HTTP_REPLAY_ON or _bypass():
+    if not _http_active():
         return None
     saved = get(make_key("ddg", query, max_results))
     if saved is not None:
@@ -347,5 +387,5 @@ def ddg_get(query: str, max_results: int):
 
 
 def ddg_put(query: str, max_results: int, results: list):
-    if HTTP_REPLAY_ON and results and not _bypass():
+    if results and _http_active():
         put(make_key("ddg", query, max_results), {"results": results})

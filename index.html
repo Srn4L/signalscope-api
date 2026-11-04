@@ -2418,6 +2418,41 @@ function toggleTheme() {
 
 // ── CONFIG ─────────────────────────────────────────────────────────────────
 const PROXY_URL = 'https://signalscope-api.onrender.com';
+
+// Dev replay (owner testing only). Open yelhao.com/?replay=ai or ?replay=all
+// to turn it on in this browser, ?replay=off to turn it off. It adds an
+// X-Replay header to backend calls; the backend ignores it unless the request
+// carries the owner code and the server allows replay. Other users are live.
+(function () {
+  let mode = null;
+  try {
+    const q = new URLSearchParams(location.search).get('replay');
+    if (q === 'off') localStorage.removeItem('yelhao_replay');
+    else if (q === 'ai' || q === 'all') localStorage.setItem('yelhao_replay', q);
+    mode = localStorage.getItem('yelhao_replay');
+  } catch (e) {}
+  if (mode !== 'ai' && mode !== 'all') return;
+  const _fetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (url.startsWith(PROXY_URL)) {
+      init = Object.assign({}, init || {});
+      const h = new Headers(init.headers || {});
+      h.set('X-Replay', mode);
+      init.headers = h;
+    }
+    return _fetch(input, init);
+  };
+  const showBadge = () => {
+    const b = document.createElement('div');
+    b.textContent = 'Replay: ' + mode;
+    b.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:9999;font:600 10px/1 sans-serif;' +
+      'padding:5px 8px;border-radius:4px;background:#e8b21e;color:#111;opacity:.85;pointer-events:none;';
+    document.body.appendChild(b);
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', showBadge);
+  else showBadge();
+})();
 const $ = id => document.getElementById(id);
 
 // ── ACCESS GATE ────────────────────────────────────────────────────────────

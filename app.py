@@ -22,6 +22,7 @@ import uuid
 import textwrap
 import sys
 from threading import Thread
+import threading
 from collections import defaultdict
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -216,13 +217,33 @@ try:
     import replay_service
     if replay_service.REPLAY_ON:
         replay_service.install_http_replay()
-        print(f"[Replay] dev replay ON (mode={replay_service.REPLAY_MODE}): "
-              "saved outside replies are reused", flush=True)
+        print("[Replay] dev replay allowed for owner requests that send "
+              "X-Replay: ai|all; all other traffic is live", flush=True)
 except Exception as _replay_import_err:
     print(f"[WARN] replay_service unavailable: {_replay_import_err}", flush=True)
     replay_service = None
 
+
+def _carry(fn):
+    """Run fn in another thread with this request's replay mode."""
+    return replay_service.carry(fn) if replay_service is not None else fn
+
+
 app = Flask(__name__)
+
+
+@app.before_request
+def _set_replay_mode():
+    # Every request gets a mode, so a reused worker thread never keeps the
+    # previous request's choice. Only the owner code can turn replay on.
+    if replay_service is None:
+        return
+    try:
+        is_owner = replay_service.REPLAY_ON and get_code_type(request) == "master"
+        replay_service.set_request_mode(
+            replay_service.mode_from_header(request.headers.get("X-Replay"), is_owner))
+    except Exception:
+        replay_service.set_request_mode("off")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ERROR LOGGING & MONITORING
@@ -312,8 +333,10 @@ API_CALL_LIMITS = {
     "tavily":         _env_int("LIMIT_API_TAVILY", 30),
     "scraperapi":     _env_int("LIMIT_API_SCRAPERAPI", 30),
     "geoapify":       _env_int("LIMIT_API_GEOAPIFY", 500),
-    # Exa lite search is $4 per 1,000; 80/day stays inside the $10 monthly credit.
-    "exa":            _env_int("LIMIT_API_EXA", 80),
+    # Exa lite search: $4 per 1,000 requests of up to 10 results; Yelhao asks
+    # for at most 10. 75/day x 31 days = 2,325 = $9.30, inside the $10 monthly
+    # credit with room for the /health/providers check.
+    "exa":            _env_int("LIMIT_API_EXA", 75),
     "firecrawl_search": _env_int("LIMIT_API_FIRECRAWL_SEARCH", 20),
 }
 
@@ -348,6 +371,24 @@ def _refund_replayed_call(url: str):
         pass
 
 
+# Providers whose cap must hold even when the shared database counter is
+# down: fall back to a per-process count instead of allowing every call.
+_FAIL_CLOSED_PROVIDERS = {"exa"}
+_LOCAL_BUDGET = {}   # (day, provider) -> count
+_LOCAL_BUDGET_LOCK = threading.Lock()
+
+
+def _local_budget_ok(provider, amount, limit, day) -> bool:
+    with _LOCAL_BUDGET_LOCK:
+        n = _LOCAL_BUDGET.get((day, provider), 0) + amount
+        if n > limit:
+            print(f"  [Budget] {provider} daily cap reached ({limit}, local count; "
+                  f"database counter unavailable); skipping provider", flush=True)
+            return False
+        _LOCAL_BUDGET[(day, provider)] = n
+        return True
+
+
 def api_budget_ok(provider: str, amount: int = 1) -> bool:
     """
     Reserve `amount` calls of a paid outside API for today (UTC). Returns False
@@ -361,12 +402,12 @@ def api_budget_ok(provider: str, amount: int = 1) -> bool:
     if limit <= 0:
         print(f"  [Budget] {provider} is turned off (limit 0)", flush=True)
         return False
-    if not _DB_AVAILABLE:
-        return True
     from datetime import datetime as _dt, timezone as _tz
     day = _dt.now(_tz.utc).date()
-    total = increment_usage(day, "global", "all", "api_" + provider, amount)
+    total = increment_usage(day, "global", "all", "api_" + provider, amount) if _DB_AVAILABLE else None
     if total is None:
+        if provider in _FAIL_CLOSED_PROVIDERS:
+            return _local_budget_ok(provider, amount, limit, day)
         return True
     if total > limit:
         increment_usage(day, "global", "all", "api_" + provider, -amount)
@@ -788,8 +829,12 @@ def exa_search(query, max_results=6):
         if r.status_code != 200:
             print(f"[Search] Exa HTTP {r.status_code} ({r.text[:120]!r}) - falling back", flush=True)
             return None
+        data = r.json()
+        _cost = (data.get("costDollars") or {}).get("total")
+        print(f"[Search] provider=exa type={data.get('resolvedSearchType') or 'lite'} "
+              f"results={len(data.get('results') or [])} cost=${_cost}", flush=True)
         out = []
-        for res in (r.json().get("results") or [])[:max_results]:
+        for res in (data.get("results") or [])[:max_results]:
             hl = res.get("highlights") or []
             text_body = " ".join(h for h in hl if isinstance(h, str)) or (res.get("text") or "")[:400]
             out.append({
@@ -834,27 +879,8 @@ def firecrawl_search(query, max_results=6):
         return None
 
 
-def search_web(query, max_results=6):
-    '''
-    Discovery and operator search.
-    Priority: Exa -> Firecrawl search -> SerpAPI -> DuckDuckGo.
-    Each paid step has a daily cap (LIMIT_API_*); over the cap it is skipped.
-    Use for: business discovery, site: operators, booking platforms,
-             social-indexed queries, official website lookup.
-
-    For review context, press, market mentions - use search_context() instead.
-    '''
-    # -- Exa - primary ----------------------------------------------------------
-    _exa = exa_search(query, max_results)
-    if _exa:
-        return _exa
-
-    # -- Firecrawl search - free monthly credits, before paid SerpAPI ----------
-    _fc = firecrawl_search(query, max_results)
-    if _fc:
-        return _fc
-
-    # -- SerpAPI (Google) - paid fallback for discovery/operators -------------
+def serpapi_search(query, max_results=6):
+    '''SerpAPI (Google results). List, possibly empty, or None when not tried.'''
     if SERP_API_KEY and api_budget_ok("serpapi"):
         try:
             import requests as _req
@@ -877,16 +903,44 @@ def search_web(query, max_results=6):
                         "title": result.get("title", ""),
                         "url":   result.get("link", ""),
                         "body":  result.get("snippet", ""),
+                        "provider": "serpapi",
                     })
-                if snippets:
-                    return snippets
-                # SerpAPI returned 200 but no organic results (quota/plan limit)
-                print(f"[Search] SerpAPI 200 but 0 results for query={query!r:.60} "
-                      f"(serpapi_error={str(data.get('error', ''))[:150]!r}) - falling back to DDG", flush=True)
+                if not snippets:
+                    # SerpAPI returned 200 but no organic results (quota/plan limit)
+                    print(f"[Search] SerpAPI 200 but 0 results for query={query!r:.60} "
+                          f"(serpapi_error={str(data.get('error', ''))[:150]!r}) - falling back to DDG", flush=True)
+                return snippets
             else:
                 print(f"[Search] SerpAPI HTTP {r.status_code} ({r.text[:150]!r}) - falling back to DDG", flush=True)
         except Exception as e:
             log_error("SerpAPI search", e, fallback="DuckDuckGo")
+    return None
+
+
+def search_web(query, max_results=6):
+    '''
+    Discovery and operator search.
+    Priority: Exa -> Firecrawl search -> SerpAPI -> DuckDuckGo.
+    Each paid step has a daily cap (LIMIT_API_*); over the cap it is skipped.
+    Use for: business discovery, site: operators, booking platforms,
+             social-indexed queries, official website lookup.
+
+    For review context, press, market mentions - use search_context() instead.
+    '''
+    # -- Exa - primary ----------------------------------------------------------
+    _exa = exa_search(query, max_results)
+    if _exa:
+        return _exa
+
+    # -- Firecrawl search - free monthly credits, before paid SerpAPI ----------
+    _fc = firecrawl_search(query, max_results)
+    if _fc:
+        return _fc
+
+    # -- SerpAPI (Google) - paid fallback for discovery/operators -------------
+    _serp = serpapi_search(query, max_results)
+    if _serp:
+        return _serp
     # (when the SerpAPI daily cap is reached, api_budget_ok already logged it)
 
     # -- DuckDuckGo - last resort -----------------------------------------------
@@ -3218,7 +3272,7 @@ def agent():
                 return platform, f"[{platform.upper()} PRESENCE DETECTED - content blocked by platform]"
             return platform, None
         with _SPE(max_workers=3) as ex:
-            for platform, text in ex.map(_fetch_social, social_links.items()):
+            for platform, text in ex.map(_carry(_fetch_social), social_links.items()):
                 if text:
                     social_text[platform] = text
 
@@ -3330,6 +3384,7 @@ def agent():
             # for natural language enrichment queries, not discovery operators
             from concurrent.futures import ThreadPoolExecutor as _TPE
             def _search_ctx(q): return search_context(q, 3)
+            _search_ctx = _carry(_search_ctx)
             with _TPE(max_workers=3) as ex:
                 f_press   = ex.submit(_search_ctx, f'"{business_name}" {location}')
                 f_reviews = ex.submit(_search_ctx, f'"{business_name}" {location} reviews')
@@ -3541,7 +3596,7 @@ def agent():
             "niche_intelligence",
         ) if k in fast_report
     }
-    Thread(target=deep_work, daemon=True).start()
+    Thread(target=_carry(deep_work), daemon=True).start()
 
     # -- Return immediately; the frontend polls /job/<id> -----------------------
     fast_brain = {
@@ -6640,6 +6695,60 @@ def health_providers():
                     "dev_replay": replay_service.status() if replay_service is not None else {"on": False}})
 
 
+@app.route('/dev/search/compare', methods=['POST'])
+def dev_search_compare():
+    """
+    Owner only. Run the same queries through each search provider directly
+    (no fallback chain, always live) and return the results side by side, so
+    providers can be compared on the same input.
+
+    Body: {"queries": ["..."], "providers": ["exa", "firecrawl", "serpapi"],
+           "max_results": 6}
+    Every call counts against that provider's daily cap.
+    """
+    if get_code_type(request) != "master":
+        return jsonify({"ok": False, "error": "Owner access code required"}), 403
+    if replay_service is not None:
+        replay_service.set_request_mode("off")     # comparisons are always live
+    body = request.get_json(force=True, silent=True) or {}
+    queries = [q for q in (body.get("queries") or []) if isinstance(q, str) and q.strip()][:10]
+    if not queries:
+        return jsonify({"ok": False, "error": "queries: list of 1-10 strings required"}), 400
+    fns = {"exa": exa_search, "firecrawl": firecrawl_search, "serpapi": serpapi_search}
+    wanted = [p for p in (body.get("providers") or list(fns)) if p in fns]
+    n = max(1, min(int(body.get("max_results") or 6), 10))
+
+    def _domain(u):
+        try:
+            return urlparse(u).netloc.lower().replace("www.", "")
+        except Exception:
+            return ""
+
+    out = []
+    for q in queries:
+        row = {"query": q, "providers": {}}
+        urls = {}
+        for p in wanted:
+            t0 = time.time()
+            res = fns[p](q, n)
+            row["providers"][p] = {
+                "status":  "not_tried (no key or daily cap)" if res is None else "ok",
+                "seconds": round(time.time() - t0, 2),
+                "results": [{"title": r.get("title"), "url": r.get("url"), "domain": _domain(r.get("url", "")),
+                             "body": (r.get("body") or "")[:240]} for r in (res or [])],
+            }
+            urls[p] = {r.get("url") for r in (res or []) if r.get("url")}
+        tried = [p for p in wanted if urls.get(p)]
+        row["overlap"] = {
+            f"{a}&{b}": len(urls[a] & urls[b])
+            for i, a in enumerate(tried) for b in tried[i + 1:]
+        }
+        row["only_in"] = {p: sorted(urls[p] - set().union(*(urls[o] for o in tried if o != p)))
+                          for p in tried}
+        out.append(row)
+    return jsonify({"ok": True, "max_results": n, "comparisons": out})
+
+
 @app.route('/dev/replay/clear', methods=['POST'])
 def dev_replay_clear():
     """Owner only: forget saved replies so the next runs fetch fresh data."""
@@ -7359,7 +7468,7 @@ def batch_analyze():
     batch_id = str(uuid.uuid4())[:8]
     BATCH_JOBS[batch_id] = {"status": "running", "items": items, "results": [], "progress": {}, "ts": time.time()}
 
-    t = _threading.Thread(target=_batch_worker, args=(batch_id, items, niche), daemon=True)
+    t = _threading.Thread(target=_carry(_batch_worker), args=(batch_id, items, niche), daemon=True)
     t.start()
     return jsonify({"ok": True, "batch_id": batch_id, "count": len(items), "status": "running"})
 
@@ -7517,7 +7626,7 @@ def batch_csv_start():
     BATCH_JOBS[batch_id]["items"]   = items
     BATCH_JOBS[batch_id]["results"] = []
 
-    t = _threading.Thread(target=_batch_worker, args=(batch_id, items, niche), daemon=True)
+    t = _threading.Thread(target=_carry(_batch_worker), args=(batch_id, items, niche), daemon=True)
     t.start()
     return jsonify({"ok": True, "batch_id": batch_id, "count": len(items), "status": "running"})
 

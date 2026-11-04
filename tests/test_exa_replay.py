@@ -53,8 +53,9 @@ def _env(monkeypatch):
     monkeypatch.setattr(app, "DDGS", None)
     monkeypatch.setattr(app, "api_budget_ok", lambda provider, amount=1: True)
     monkeypatch.setattr(rs, "REPLAY_ON", False)
-    monkeypatch.setattr(rs, "HTTP_REPLAY_ON", False)
+    rs.set_request_mode("off")
     yield
+    rs.set_request_mode("off")
 
 
 def _exa_ok(request):
@@ -123,7 +124,7 @@ def test_no_exa_key_means_no_exa_call(net, monkeypatch):
 @pytest.fixture
 def replay(monkeypatch):
     monkeypatch.setattr(rs, "REPLAY_ON", True)
-    monkeypatch.setattr(rs, "HTTP_REPLAY_ON", True)
+    rs.set_request_mode("all")
     monkeypatch.setattr(rs, "_db_session", lambda: (_ for _ in ()).throw(RuntimeError("no db")))
     rs._MEM.clear()
     for k in rs.STATS:
@@ -179,7 +180,6 @@ def test_health_checks_always_reach_the_real_service(net, replay):
 
 def test_replay_off_changes_nothing(net, monkeypatch):
     monkeypatch.setattr(rs, "REPLAY_ON", False)
-    monkeypatch.setattr(rs, "HTTP_REPLAY_ON", False)
     rs.install_http_replay()
     fake = net(_exa_ok)
     app.search_web("nail salon Astoria")
@@ -187,33 +187,130 @@ def test_replay_off_changes_nothing(net, monkeypatch):
     assert len(fake.calls) == 2
 
 
-def test_ai_mode_keeps_searches_live(net, replay, monkeypatch):
-    monkeypatch.setattr(rs, "HTTP_REPLAY_ON", False)     # YELHAO_DEV_REPLAY=ai
+def test_ai_mode_keeps_searches_live(net, replay):
+    rs.set_request_mode("ai")
     fake = net(_exa_ok)
     app.search_web("nail salon Astoria")
     app.search_web("nail salon Astoria")
     assert len(fake.calls) == 2
 
 
-def test_x_replay_off_header_forces_a_live_run(net, replay):
+def test_allowed_on_server_but_no_header_means_live(net, replay):
+    rs.set_request_mode("off")                           # what a request without X-Replay gets
     fake = net(_exa_ok)
-    app.search_web("nail salon Astoria")                 # saved
-    with app.app.test_request_context("/agent", headers={"X-Replay": "off"}):
-        app.search_web("nail salon Astoria")             # live despite the saved reply
+    app.search_web("nail salon Astoria")
+    app.search_web("nail salon Astoria")
     assert len(fake.calls) == 2
 
 
-@pytest.mark.parametrize("raw,mode", [("1", "all"), ("all", "all"), ("ai", "ai"), ("", "off"), ("0", "off")])
-def test_mode_parsing(monkeypatch, raw, mode):
+@pytest.mark.parametrize("header,owner,allowed,mode", [
+    ("ai", True, True, "ai"),
+    ("all", True, True, "all"),
+    ("ai", False, True, "off"),      # other users: header ignored
+    ("all", False, True, "off"),
+    ("ai", True, False, "off"),      # server does not allow replay
+    ("", True, True, "off"),
+    ("off", True, True, "off"),
+    ("garbage", True, True, "off"),
+])
+def test_only_the_owner_can_opt_in(monkeypatch, header, owner, allowed, mode):
+    monkeypatch.setattr(rs, "REPLAY_ON", allowed)
+    assert rs.mode_from_header(header, owner) == mode
+
+
+def test_before_request_sets_mode_per_request(monkeypatch):
+    monkeypatch.setattr(rs, "REPLAY_ON", True)
+    with app.app.test_request_context("/prospect", headers={"X-Replay": "ai", "X-Agent-Token": app.MASTER_CODE}):
+        app.app.preprocess_request()
+        assert rs.current_mode() == "ai"
+    with app.app.test_request_context("/prospect", headers={"X-Replay": "ai", "X-Agent-Token": "not-the-owner"}):
+        app.app.preprocess_request()
+        assert rs.current_mode() == "off"
+    with app.app.test_request_context("/prospect", headers={"X-Agent-Token": app.MASTER_CODE}):
+        app.app.preprocess_request()
+        assert rs.current_mode() == "off"                # previous request's mode does not stick
+
+
+def test_background_threads_keep_the_request_mode(replay):
+    import threading
+    rs.set_request_mode("ai")
+    seen = {}
+
+    def work(tag):
+        seen[tag] = rs.current_mode()
+
+    t1 = threading.Thread(target=app._carry(work), args=("carried",))
+    t2 = threading.Thread(target=work, args=("plain",))
+    t1.start(); t2.start(); t1.join(); t2.join()
+    assert seen == {"carried": "ai", "plain": "off"}
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        modes = list(ex.map(app._carry(lambda _: rs.current_mode()), range(6)))
+    assert modes == ["ai"] * 6
+
+
+@pytest.mark.parametrize("raw,allowed", [("1", True), ("allow", True), ("ai", True), ("", False), ("0", False)])
+def test_server_permission_parsing(monkeypatch, raw, allowed):
     import importlib
     monkeypatch.setenv("YELHAO_DEV_REPLAY", raw)
     m = importlib.reload(rs)
     try:
-        assert m.REPLAY_MODE == mode
-        assert m.HTTP_REPLAY_ON == (mode == "all")
+        assert m.REPLAY_ON is allowed
+        assert m.current_mode() == "off"                 # permission alone replays nothing
     finally:
         monkeypatch.delenv("YELHAO_DEV_REPLAY")
         importlib.reload(rs)
+
+
+# ── Exa cap ────────────────────────────────────────────────────────────────
+
+def test_exa_request_is_lite_and_never_over_ten_results(net):
+    fake = net(_exa_ok)
+    app.exa_search("cafe Harlem", 25)
+    sent = json.loads(fake.calls[0][2])
+    assert sent["type"] == "lite" and sent["numResults"] == 10
+    assert set(sent["contents"]) == {"highlights"}       # no paid extras (summary)
+
+
+def test_exa_cap_holds_without_the_database(monkeypatch):
+    monkeypatch.undo()                                   # use the real api_budget_ok
+    monkeypatch.setattr(app, "_DB_AVAILABLE", False)
+    monkeypatch.setitem(app.API_CALL_LIMITS, "exa", 3)
+    app._LOCAL_BUDGET.clear()
+    got = [app.api_budget_ok("exa") for _ in range(5)]
+    assert got == [True, True, True, False, False]
+    # other providers keep today's behavior when the counter is down
+    assert all(app.api_budget_ok("serpapi") for _ in range(20))
+
+
+def test_default_exa_cap_fits_the_monthly_credit():
+    assert app.API_CALL_LIMITS["exa"] * 31 * 4 / 1000 <= 10.0
+
+
+# ── Provider comparison ────────────────────────────────────────────────────
+
+def test_compare_runs_each_provider_on_the_same_query(net, monkeypatch):
+    monkeypatch.setattr(app, "FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setattr(app, "SERP_API_KEY", "serp-test")
+
+    def handler(request):
+        if "exa.ai" in request.url:
+            return 200, {"results": [{"title": "A", "url": "https://a.com", "highlights": ["a"]},
+                                     {"title": "B", "url": "https://b.com", "highlights": ["b"]}]}
+        if "firecrawl.dev" in request.url:
+            return 200, {"data": [{"title": "B", "url": "https://b.com", "description": "b"}]}
+        return 200, {"organic_results": [{"title": "C", "link": "https://c.com", "snippet": "c"}]}
+
+    net(handler)
+    c = app.app.test_client()
+    assert c.post("/dev/search/compare", json={"queries": ["x"]}).status_code == 403
+    r = c.post("/dev/search/compare", json={"queries": ["cafe Harlem"]},
+               headers={"X-Agent-Token": app.MASTER_CODE}).get_json()
+    row = r["comparisons"][0]
+    assert set(row["providers"]) == {"exa", "firecrawl", "serpapi"}
+    assert row["overlap"]["exa&firecrawl"] == 1
+    assert row["only_in"]["exa"] == ["https://a.com"] and row["only_in"]["serpapi"] == ["https://c.com"]
 
 
 def test_ai_replies_are_replayed_by_full_request(replay):
