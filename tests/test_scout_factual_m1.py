@@ -180,18 +180,47 @@ def test_no_details_calls_before_ranking(monkeypatch):
     assert seen["details_before_first_score"] == 0
 
 
-def test_enrichment_targets_top_5_ranked_google_cards_only(monkeypatch):
+def test_enrichment_covers_every_shown_google_card_in_rank_order(monkeypatch):
     fake = FakeGoogle(with_target_at(7))
     _setup(monkeypatch, fake)
-    data = scout()
-    top5_names = [c["business_name"] for c in data["results"][:5]]
+    data = scout(limit=10)
+    shown = [c["business_name"] for c in data["results"]]
     by_name = {p["name"]: p["place_id"] for p in with_target_at(7)}
-    assert fake.details_ids() == [by_name[n] for n in top5_names]
-    assert len(fake.details_ids()) <= 5
-    for c in data["results"][:5]:
+    assert fake.details_ids() == [by_name[n] for n in shown]
+    for c in data["results"]:
         assert c["website_checked"] is True and c["phone"]
-    for c in data["results"][5:]:
-        assert c["website_checked"] is False and c["phone"] == ""
+
+
+def test_enrichment_stops_at_the_shown_limit(monkeypatch):
+    fake = FakeGoogle(with_target_at(7))
+    _setup(monkeypatch, fake)
+    data = scout(limit=4)
+    assert len(data["results"]) == 4
+    assert len(fake.details_ids()) == 4
+
+
+def test_daily_details_cap_leaves_the_rest_not_checked(monkeypatch):
+    fake = FakeGoogle(with_target_at(7))
+    _setup(monkeypatch, fake)
+    monkeypatch.setattr(app, "_DB_AVAILABLE", True)
+    used = {"n": 0}
+
+    def counter(day, scope, key, kind, amount):
+        if kind == "api_google_details":
+            used["n"] += amount
+            return used["n"]
+        return 1
+
+    monkeypatch.setattr(app, "increment_usage", counter)
+    limits = dict(app.API_CALL_LIMITS, google_details=3)
+    monkeypatch.setattr(app, "API_CALL_LIMITS", limits)
+    for name in ("save_search", "upsert_business", "log_discovery_event"):
+        monkeypatch.setattr(app, name, lambda *a, **k: None)
+    monkeypatch.setattr(app, "get_candidate_exposure_stats", lambda *a, **k: {})
+    monkeypatch.setattr(app, "apply_saturation_rerank", lambda scored, *a, **k: scored)
+    data = scout(limit=10)
+    assert len(fake.details_ids()) == 3
+    assert [c["website_checked"] for c in data["results"]][:4] == [True, True, True, False]
 
 
 def test_budget_guard_off_means_no_enrichment(monkeypatch):
@@ -228,11 +257,9 @@ def test_checked_absent_website_is_a_display_fact_only(monkeypatch):
     _setup(monkeypatch, FakeGoogle(with_target_at(4)))
     data = scout()
     assert ranking_view(data) == before
-    for c in data["results"][:5]:
+    for c in data["results"]:
         assert c["website_checked"] is True
         assert c["website_fact"] == "No website on the Google listing"
-    for c in data["results"][5:]:
-        assert c["website_fact"] == ""
 
 
 # ── Operating status gate ──────────────────────────────────────────────────

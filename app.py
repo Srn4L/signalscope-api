@@ -733,13 +733,16 @@ def search_web(query, max_results=6):
                 print(f"[Search] SerpAPI HTTP {r.status_code} ({r.text[:150]!r}) - falling back to DDG", flush=True)
         except Exception as e:
             log_error("SerpAPI search", e, fallback="DuckDuckGo")
-    else:
-        print(f"[Search] SERP_API_KEY not set — using DDG only", flush=True)
+    elif not SERP_API_KEY:
+        print(f"[Search] SERP_API_KEY not set - using DDG", flush=True)
+    # (when the SerpAPI daily cap is reached, api_budget_ok already logged it)
 
     # -- DuckDuckGo fallback ---------------------------------------------------
     snippets = []
     if DDGS is None:
         return snippets
+    if ddg_cooling_down():
+        return snippets  # blocked recently: skip instead of waiting on a timeout
     try:
         with DDGS() as ddgs:
             results = ddgs.text(query, max_results=max_results)
@@ -747,7 +750,39 @@ def search_web(query, max_results=6):
                 snippets.append({"title": r.get("title",""), "url": r.get("href",""), "body": r.get("body","")})
     except Exception as e:
         log_error("DuckDuckGo search", e, query=query)
+        if _is_ddg_block(e):
+            start_ddg_cooldown(e)
     return snippets
+
+
+# -- DuckDuckGo cooldown -------------------------------------------------------
+# DuckDuckGo has no official API and throttles server traffic: first with
+# "202 Ratelimit", then by dropping connections until a 10s timeout. After the
+# first block, skip DuckDuckGo for a while instead of paying a timeout on every
+# remaining search. Process-wide, because the block is on the server's address.
+DDG_COOLDOWN_SECONDS = _env_int("DDG_COOLDOWN_SECONDS", 900)
+_DDG_STATE = {"until": 0.0, "skipped": 0}
+
+
+def _is_ddg_block(err) -> bool:
+    msg = f"{type(err).__name__} {err}".lower()
+    return any(s in msg for s in ("ratelimit", "rate limit", "timed out", "timeout"))
+
+
+def start_ddg_cooldown(err=None):
+    _DDG_STATE["until"] = time.time() + DDG_COOLDOWN_SECONDS
+    _DDG_STATE["skipped"] = 0
+    print(f"[Search] DuckDuckGo blocked ({str(err)[:80]!r}); skipping it for "
+          f"{DDG_COOLDOWN_SECONDS // 60} min", flush=True)
+
+
+def ddg_cooling_down() -> bool:
+    if time.time() < _DDG_STATE["until"]:
+        _DDG_STATE["skipped"] += 1
+        if _DDG_STATE["skipped"] in (1, 10, 50):
+            print(f"[Search] DuckDuckGo cooling down - skipped {_DDG_STATE['skipped']} search(es)", flush=True)
+        return True
+    return False
 
 
 def search_context(query, max_results=6):
@@ -918,7 +953,11 @@ def scrape_booking_competitors(business_name, industry, location, limit=5):
             f'site:{domain} {service_hint} {location}',
         ]
 
-        for query in queries:
+        for qi, query in enumerate(queries):
+            # The looser second query only runs if the exact one found nothing
+            # on this platform (saves one search per platform).
+            if qi > 0 and any(c.get("platform") == platform for c in cards):
+                break
             results = search_web(query, max_results=3)
             for r in results:
                 url = r.get("url", "")
@@ -1061,6 +1100,7 @@ def discover_business_signals(business_name, location, industry=""):
     # Try web search for website if not found
     if not signals["website"]:
         try:
+            signals["website_searched"] = True
             results = search_web(f'"{business_name}" {location} official site', 3)
             for r in results:
                 url = r.get("url", "")
@@ -1176,12 +1216,24 @@ def scrape_reddit_trends(keyword):
     return trends[:3]
 
 
+_TREND_CACHE = {}          # keyword -> (result, timestamp)
+TREND_CACHE_TTL = 86400    # trends are per niche, not per business: reuse for a day
+
+
 def fetch_trend_intelligence(business_name, industry, location, website_pages):
     print(f"  -> Trend intelligence for niche: {industry or business_name}")
     keywords = detect_niche_keywords(industry, business_name, website_pages)
     if not keywords:
         return None
     print(f"  -> Trend keywords: {keywords[:3]}")
+
+    # Same niche within a day: reuse instead of 4 more searches. Keyed on the
+    # industry, because the keyword list is unordered and varies by business name.
+    _ck = (industry or "").lower().strip() or "|".join(sorted(k.lower() for k in keywords))
+    _hit = _TREND_CACHE.get(_ck)
+    if _hit and time.time() - _hit[1] < TREND_CACHE_TTL:
+        print(f"  [OK] Trends: cached for {_ck!r}", flush=True)
+        return _hit[0]
     all_trends = []
     for keyword in keywords[:1]:
         all_trends.extend(scrape_tiktok_trends(keyword))
@@ -1196,6 +1248,9 @@ def fetch_trend_intelligence(business_name, industry, location, website_pages):
         "top_hashtags":      list(set(h for t in all_trends for h in t.get("hashtags",[]) if len(h) > 3))[:10],
     }
     print(f"  [OK] Trends: {len(result['tiktok_trends'])} TikTok, {len(result['instagram_trends'])} Instagram, {len(result['reddit_signals'])} Reddit")
+    # Cache only real results, so a blocked search isn't remembered as "no trends"
+    if result["tiktok_trends"] or result["instagram_trends"] or result["reddit_signals"]:
+        _TREND_CACHE[_ck] = (result, time.time())
     return result
 
 
@@ -2882,8 +2937,10 @@ def agent():
                             break
                 break
 
+    _website_search_done = False  # set when discovery already ran the "official site" web search
     if analysis_mode == "identity_led":
         discovered = discover_business_signals(business_name, location, industry)
+        _website_search_done = bool(discovered.get("website_searched"))
 
         if discovered["website"]:
             website_url = discovered["website"]
@@ -2958,7 +3015,8 @@ def agent():
                     text = extract_text(h, 1500)
                     if text: website_pages[slug.lstrip("/")] = text
     else:
-        results = search_web(f'"{business_name}" {location} official website', 3)
+        # Skip when discovery already ran the near-identical "official site" search
+        results = [] if _website_search_done else search_web(f'"{business_name}" {location} official website', 3)
         for r in results:
             u = r.get("url", "")
             skip = ["yelp","google","facebook","instagram","tiktok","twitter","linkedin","bing"]
@@ -6117,9 +6175,10 @@ def prospect():
 
     # ── Enrich shown Google cards (Milestone 1) ───────────────────────────────
     # Order and every score are already fixed above; this only adds website
-    # and phone as displayed facts. Same ceiling as before: 5 Details calls.
+    # and phone as displayed facts. Every shown Google card is enriched (one
+    # Details call each, up to `limit`), still behind the daily google_details cap.
     try:
-        enrich_shown_google_cards(top_results, max_calls=5)
+        enrich_shown_google_cards(top_results, max_calls=len(top_results))
     except Exception as _enrich_err:
         log_error("scout enrichment", _enrich_err)
 
