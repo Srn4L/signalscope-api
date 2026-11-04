@@ -3717,6 +3717,16 @@ def score_reputation_strength(rating: float, review_count: int) -> int:
     return rating_pts + count_pts
 
 
+def _is_checked(candidate: dict, field: str) -> bool:
+    '''
+    Was this field actually looked up for this candidate?
+    Only Scout's Google candidates carry <field>_checked=False (Milestone 1);
+    every other caller and source omits the key and keeps today's behavior.
+    '''
+    v = (candidate or {}).get(f"{field}_checked")
+    return True if v is None else bool(v)
+
+
 def score_contactability(candidate: dict) -> int:
     '''
     0-100. Can we actually reach this business through a public channel?
@@ -3732,7 +3742,10 @@ def score_contactability(candidate: dict) -> int:
     if has_website:                              score += 25
     if has_instagram or has_facebook:            score += 20
     if has_tiktok:                               score += 10
-    if not has_website and not has_instagram:    score -= 20  # truly dark business
+    # Truly dark business - only when website and social were both looked up
+    if (not has_website and not has_instagram
+            and _is_checked(candidate, "website") and _is_checked(candidate, "social")):
+        score -= 20
 
     return max(0, min(score, 100))
 
@@ -3772,13 +3785,23 @@ def build_signals(candidate: dict, mode: str = "outreach") -> dict:
     rep = score_reputation_strength(rating, review_count)
     cq  = score_contactability(candidate)
 
+    # What was actually looked up (Milestone 1: only Scout's Google candidates
+    # arrive with these False; everything else defaults to checked).
+    website_checked = _is_checked(candidate, "website")
+    social_checked  = _is_checked(candidate, "social")
+    booking_checked = _is_checked(candidate, "booking")
+
     # Gap logic - specific, not generic
     booking_gap  = not has_booking
-    website_gap  = max(0, 100 - wq) if has_website else 100      # 100 if no site at all
+    if website_checked:
+        website_gap = max(0, 100 - wq) if has_website else 100   # 100 if no site at all
+    else:
+        website_gap = 0                                           # not checked: no gap points
     social_gap   = max(0, 100 - sq) if has_social  else 100
-    # SEO gap proxy: no website OR very few reviews despite existing
-    seo_gap      = 80 if not has_website else (60 if review_count < 10 else
-                   (30 if review_count < 50 else 10))
+    # SEO gap proxy: no website OR very few reviews despite existing.
+    # When the website was not checked, only the review part applies.
+    _review_seo  = 60 if review_count < 10 else (30 if review_count < 50 else 10)
+    seo_gap      = 80 if (website_checked and not has_website) else _review_seo
 
     # Timing proxies (limited in Scout path)
     recent_activity = has_instagram or has_tiktok            # active social = likely posting
@@ -3846,6 +3869,22 @@ def build_signals(candidate: dict, mode: str = "outreach") -> dict:
             "source_confidence":  source_confidence,
             "data_coverage_score": coverage_score,
         },
+        # Milestone 1: which presence fields were actually looked up
+        "checked": {
+            "website": website_checked,
+            "social":  social_checked,
+            "booking": booking_checked,
+        },
+    }
+
+
+def _checked_flags(signals: dict) -> dict:
+    '''Checked flags from build_signals, defaulting to all True for older callers.'''
+    c = signals.get("checked") or {}
+    return {
+        "website": c.get("website", True),
+        "social":  c.get("social", True),
+        "booking": c.get("booking", True),
     }
 
 
@@ -3908,7 +3947,8 @@ def compute_sub_scores(signals: dict, mode: str = "outreach") -> dict:
             (30 if biz["is_independent"] else 0)
             + (25 if pres["has_google_presence"] else 0)
             + (20 if gaps["booking_gap"] else 0)
-            + (15 if not pres["has_website"] else 5)
+            # Website fit bonus only when the website was looked up
+            + ((15 if not pres["has_website"] else 5) if _checked_flags(signals)["website"] else 0)
             + (10 if con["contact_score"] > 30 else 0)
         )
     elif mode == "partnership":
@@ -3966,6 +4006,9 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
     reviews = rep["review_count"]
     rep_str = rep["review_strength"]
 
+    # Absence or quality statements only about fields that were looked up
+    chk = _checked_flags(signals)
+
     # Resolve parent mode for mode-specific logic
     parent_mode = _PARENT_MODE_ALIAS.get(mode, mode)
 
@@ -4009,14 +4052,14 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
 
     # ── GAP reasons ───────────────────────────────────────────────────────────
     if parent_mode == "outreach":
-        if gaps["booking_gap"] and reviews >= 10:
+        if chk["booking"] and gaps["booking_gap"] and reviews >= 10:
             reasons.append({
                 "key": "booking_gap",
                 "signal": "Clear gap: no booking path detected, which creates a direct conversion improvement opportunity.",
                 "impact": "positive",
                 "weight": "high",
             })
-        elif gaps["booking_gap"]:
+        elif chk["booking"] and gaps["booking_gap"]:
             reasons.append({
                 "key": "booking_gap",
                 "signal": "No online booking system - common gap for businesses in this category.",
@@ -4024,14 +4067,14 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
                 "weight": "medium",
             })
 
-        if gaps["website_gap"] == 100:
+        if chk["website"] and gaps["website_gap"] == 100:
             reasons.append({
                 "key": "no_website",
                 "signal": "No website found - the business is likely losing inbound traffic to better-indexed competitors.",
                 "impact": "positive",
                 "weight": "high",
             })
-        elif 40 < gaps["website_gap"] < 100:
+        elif chk["website"] and 40 < gaps["website_gap"] < 100:
             reasons.append({
                 "key": "weak_website",
                 "signal": f"Website exists but quality is weak - probably leaking inbound traffic with no clear CTA or booking path.",
@@ -4039,7 +4082,7 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
                 "weight": "medium",
             })
 
-        if gaps["social_gap"] >= 60:
+        if chk["social"] and gaps["social_gap"] >= 60:
             reasons.append({
                 "key": "weak_social",
                 "signal": "Weak or no social presence - underserved on discovery, which compounds the website gap.",
@@ -4063,14 +4106,14 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
                 "impact": "positive",
                 "weight": "high",
             })
-        elif gaps["social_gap"] == 100:
+        elif chk["social"] and gaps["social_gap"] == 100:
             reasons.append({
                 "key": "no_social",
                 "signal": "No social profiles detected - limits the natural collab or creator pitch angle.",
                 "impact": "negative",
                 "weight": "high",
             })
-        elif gaps["social_gap"] >= 60:
+        elif chk["social"] and gaps["social_gap"] >= 60:
             reasons.append({
                 "key": "weak_social",
                 "signal": "Underdeveloped social content - if the category fits, a content or creator partnership pitch is natural here.",
@@ -4102,7 +4145,7 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
                 "impact": "positive",
                 "weight": "high",
             })
-        if gaps["social_gap"] >= 60 and reviews < 500:
+        if chk["social"] and gaps["social_gap"] >= 60 and reviews < 500:
             reasons.append({
                 "key": "low_visibility",
                 "signal": "Little social media presence - low visibility is an opening for coverage, not a sign of a weak business.",
@@ -4125,7 +4168,7 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
             })
 
     elif parent_mode == "market":
-        if gaps["website_gap"] == 100:
+        if chk["website"] and gaps["website_gap"] == 100:
             reasons.append({
                 "key": "no_website",
                 "signal": "No website - limited public data for market analysis, treat with lower confidence.",
@@ -4155,7 +4198,8 @@ def _build_reasons(signals: dict, sub_scores: dict, candidate: dict, mode: str) 
             "impact": "positive",
             "weight": "medium",
         })
-    elif con["contact_score"] < 20:
+    elif con["contact_score"] < 20 and chk["website"] and chk["social"]:
+        # Only claim "hard to reach" when the contact channels were looked up
         reasons.append({
             "key": "hard_to_reach",
             "signal": "Limited contact signals found - harder to reach without more research first.",
@@ -4204,6 +4248,24 @@ def _build_opportunity_summary(signals: dict, sub_scores: dict, score: int, mode
     has_booking = pres["has_booking"]
     has_website = pres["has_website"]
     has_social  = pres["has_social"]
+
+    # Unchecked fields are never described as missing (Milestone 1)
+    chk = _checked_flags(signals)
+    if mode == "outreach" and not (chk["website"] and chk["booking"]):
+        if has_demand:
+            return (f"Proven local demand ({rep['rating']}★, {rep['review_count']} reviews). "
+                    "Website and booking path not checked yet - run Analyze to confirm the gaps.")
+        return ("Limited review data so far. Website and booking path not checked yet - "
+                "run Analyze before approaching.")
+    if mode == "partnership" and not chk["social"] and not has_social:
+        if has_demand:
+            return (f"Established local business ({rep['rating']}★, {rep['review_count']} reviews). "
+                    "Social presence not checked yet.")
+        return "Early-stage or data-sparse business. Social presence not checked yet."
+    if mode == "feature" and not chk["social"] and not has_social and rep["review_count"]:
+        count, rating = rep["review_count"], rep["rating"]
+        if not (rating >= 4.5 and count < 50) and count < 500:
+            return "Solid local reputation; social presence not checked yet."
 
     if mode == "outreach":
         if has_demand and not has_booking and not has_website:
@@ -4485,8 +4547,12 @@ def compute_signal_scores(signals: dict, sub_scores: dict, mode: str = "outreach
     social_sev  = min(gaps["social_gap"],  100)
     seo_sev     = min(gaps["seo_gap"],     100)
 
-    # Quality weakness amplifier - weak infrastructure makes gaps more fixable
-    quality_weakness = max(0, 60 - sub_scores["quality_score"])  # 0 if quality≥60
+    # Quality weakness amplifier - weak infrastructure makes gaps more fixable.
+    # Skipped when the website was not looked up (its quality is unknown).
+    if _checked_flags(signals)["website"]:
+        quality_weakness = max(0, 60 - sub_scores["quality_score"])  # 0 if quality≥60
+    else:
+        quality_weakness = 0
 
     if parent_mode == "outreach":
         gap_raw = (
@@ -4614,6 +4680,9 @@ def _build_top_signal(signal_scores: dict, signals: dict, mode: str) -> str:
     # Resolve alias for logic
     parent_mode = _PARENT_MODE_ALIAS.get(mode, mode)
 
+    # Unchecked fields are never described as missing (Milestone 1)
+    chk = _checked_flags(signals)
+
     # ── Feature (worth featuring) ─────────────────────────────────────────────
     if parent_mode == "feature":
         count, rating = int(rep["review_count"] or 0), float(rep["rating"] or 0)
@@ -4623,7 +4692,7 @@ def _build_top_signal(signal_scores: dict, signals: dict, mode: str) -> str:
             return "Already well known - less of a discovery"
         if rating >= 4.6 and count < 50:
             return f"Highly rated ({rating}\u2605) with only {count} reviews - under-discovered"
-        if rating >= 4.4 and gaps["social_gap"] >= 60:
+        if chk["social"] and rating >= 4.4 and gaps["social_gap"] >= 60:
             return "Loved locally, barely visible online"
         if rating >= 4.4 and count < 200:
             return "Strong reviews, still under the radar"
@@ -4631,6 +4700,10 @@ def _build_top_signal(signal_scores: dict, signals: dict, mode: str) -> str:
 
     # ── Outreach ──────────────────────────────────────────────────────────────
     if parent_mode == "outreach":
+        if not (chk["website"] and chk["booking"]):
+            if demand >= 50:
+                return "Proven demand - website and booking not checked yet"
+            return "Limited demand data - website and booking not checked yet"
         if demand >= 60 and gaps["booking_gap"] and not pres["has_website"]:
             return "Strong demand + no website or booking path"
         if demand >= 60 and gaps["booking_gap"]:
@@ -4651,7 +4724,7 @@ def _build_top_signal(signal_scores: dict, signals: dict, mode: str) -> str:
             return f"Trusted local brand ({rep['rating']}★) with active social presence"
         if demand >= 65 and biz["visual_category"]:
             return "Reputable visual business - strong creator or collab fit"
-        if demand >= 50 and gaps["social_gap"] >= 60:
+        if chk["social"] and demand >= 50 and gaps["social_gap"] >= 60:
             return "Trusted local brand + weak social content"
         if demand >= 50:
             return "Established reputation - reachable for partnership"
@@ -4766,17 +4839,21 @@ def apply_hard_filters(candidate, hard_filters):
     if review_ceiling and int(review_count) > int(review_ceiling):
         return False, f"Review count {review_count} exceeds ceiling {review_ceiling}"
 
+    # A field that was never looked up cannot pass or fail a filter
+    # (not checked is not absent) - Milestone 1.
     req_website = (hard_filters.get("requires_website") or "either").lower()
-    if req_website == "yes" and not has_website:
-        return False, "No website - required by filter"
-    if req_website == "no" and has_website:
-        return False, "Has website - excluded by filter"
+    if _is_checked(candidate, "website"):
+        if req_website == "yes" and not has_website:
+            return False, "No website - required by filter"
+        if req_website == "no" and has_website:
+            return False, "Has website - excluded by filter"
 
     req_booking = (hard_filters.get("requires_booking") or "either").lower()
-    if req_booking == "yes" and not has_booking:
-        return False, "No booking platform - required by filter"
-    if req_booking == "no" and has_booking:
-        return False, "Has booking - excluded by filter"
+    if _is_checked(candidate, "booking"):
+        if req_booking == "yes" and not has_booking:
+            return False, "No booking platform - required by filter"
+        if req_booking == "no" and has_booking:
+            return False, "Has booking - excluded by filter"
 
     return True, "passed"
 
@@ -4977,7 +5054,44 @@ def estimate_growth_metrics(lead, niche=''):
         }
     }
 
-def search_google_places(niche, location, limit=10):
+def fetch_google_place_details(place_id, timeout=5):
+    '''
+    One Google Places Details call for website and phone.
+    Returns {"website": str, "phone": str} on success, or None when the call
+    was not made or failed (caller must treat None as "not checked").
+    '''
+    import requests as req
+    key = os.environ.get("GOOGLE_PLACES_API_KEY", "")
+    if not key or not place_id:
+        return None
+    try:
+        det = req.get(
+            "https://maps.googleapis.com/maps/api/place/details/json",
+            params={"place_id": place_id, "fields": "website,formatted_phone_number", "key": key},
+            timeout=timeout
+        ).json()
+        if det.get("status") not in (None, "OK"):
+            return None
+        res = det.get("result", {}) or {}
+        return {
+            "website": res.get("website", "") or "",
+            "phone":   res.get("formatted_phone_number", "") or "",
+        }
+    except Exception as e:
+        log_error("Google Places details fetch", e, place_id=place_id)
+        return None
+
+
+def search_google_places(niche, location, limit=10, fetch_details=True):
+    '''
+    Google Places Text Search.
+
+    fetch_details=True (default, used by Analyze and other callers) keeps the
+    original behavior: website and phone are fetched inline for the first 5
+    results. Scout passes fetch_details=False so every candidate is scored
+    from the same search-response fields; website and phone are then fetched
+    after ranking for the cards that will be shown (see enrich_shown_google_cards).
+    '''
     import requests as req
     key = os.environ.get("GOOGLE_PLACES_API_KEY", "")
     if not key:
@@ -5004,31 +5118,98 @@ def search_google_places(niche, location, limit=10):
             if not name or len(name) < 3:
                 continue
             website = ""
-            if place_id and len(results) < 5 and api_budget_ok("google_details"):
-                try:
-                    det = req.get(
-                        "https://maps.googleapis.com/maps/api/place/details/json",
-                        params={"place_id": place_id, "fields": "website,formatted_phone_number", "key": key},
-                        timeout=5
-                    ).json()
-                    website = det.get("result", {}).get("website", "")
-                except Exception as e:
-                    log_error("Google Places details fetch", e, place_id=place_id)
-            results.append({
-                "business_name": name,
-                "website":       website or "",  # No website = empty, not Google search
-                "platform":      "google_places",
-                "location":      location,
-                "industry":      niche,
-                "address":       p.get("formatted_address", ""),
-                "rating":        p.get("rating", 0),
-                "review_count":  p.get("user_ratings_total", 0),
-            })
+            phone   = ""
+            if fetch_details and place_id and len(results) < 5 and api_budget_ok("google_details"):
+                _det = fetch_google_place_details(place_id, timeout=5)
+                if _det:
+                    website = _det["website"]
+                    phone   = _det["phone"]
+            row = {
+                "business_name":   name,
+                "website":         website or "",  # No website = empty, not Google search
+                "platform":        "google_places",
+                "location":        location,
+                "industry":        niche,
+                "address":         p.get("formatted_address", ""),
+                "rating":          p.get("rating", 0),
+                "review_count":    p.get("user_ratings_total", 0),
+                "google_place_id": place_id,
+                "business_status": p.get("business_status", "") or "",
+                "phone":           phone,
+            }
+            if not fetch_details:
+                # Nothing beyond the search response was looked up yet.
+                row["website_checked"] = False
+                row["social_checked"]  = False
+                row["booking_checked"] = False
+            results.append(row)
         print(f"  -> Google Places: {len(results)} results (status={_gp_status})")
         return results
     except Exception as e:
         log_error("Google Places search", e)
         return []
+
+
+def apply_operating_status_gate(candidates):
+    '''
+    Split candidates by Google business_status.
+    Returns (kept, held_back). CLOSED_PERMANENTLY is dropped entirely,
+    CLOSED_TEMPORARILY goes to held_back with a reason, anything else
+    (OPERATIONAL, missing or unknown) is kept.
+    '''
+    kept, held_back = [], []
+    for c in candidates or []:
+        status = str(c.get("business_status") or "").upper()
+        if status == "CLOSED_PERMANENTLY":
+            print(f"  [StatusGate] dropped permanently closed: {c.get('business_name')}", flush=True)
+            continue
+        if status == "CLOSED_TEMPORARILY":
+            held_back.append({
+                "business_name":   c.get("business_name"),
+                "address":         c.get("address") or "",
+                "source":          c.get("source") or c.get("platform") or "",
+                "business_status": status,
+                "reason":          "Google lists this business as temporarily closed.",
+            })
+            continue
+        kept.append(c)
+    return kept, held_back
+
+
+_GOOGLE_SCOUT_SOURCES = ("google_text", "google_nearby", "adjacent_category")
+
+
+def enrich_shown_google_cards(results, max_calls=5):
+    '''
+    After ranking: fetch website and phone for the top-ranked Google cards
+    that were scored without them. Display facts only - this never changes
+    opportunity_score, score_confidence, need_score, lane, reasons or order.
+    Returns the number of Details calls made.
+    '''
+    calls = 0
+    for b in results or []:
+        if calls >= max_calls:
+            break
+        if b.get("website_checked") is not False:
+            continue
+        if (b.get("source") or "") not in _GOOGLE_SCOUT_SOURCES:
+            continue
+        place_id = b.get("google_place_id") or ""
+        if not place_id:
+            continue
+        if not api_budget_ok("google_details"):
+            break
+        calls += 1
+        det = fetch_google_place_details(place_id, timeout=5)
+        if det is None:
+            continue  # call failed: stays "not checked"
+        b["website_checked"] = True
+        b["website"] = det["website"]
+        b["phone"]   = det["phone"]
+        b["website_fact"] = "" if det["website"] else "No website on the Google listing"
+    if calls:
+        print(f"  -> Enriched {calls} shown Google cards with Details", flush=True)
+    return calls
 
 
 # Niche keyword -> Geoapify category. Checked in order, so specific entries
@@ -5229,7 +5410,7 @@ def _geocode_google(business_name, address=None, location=None):
     return None, None
 
 
-def nearby_competitors_google(lat, lng, niche, radius_m=1500, limit=8):
+def nearby_competitors_google(lat, lng, niche, radius_m=1500, limit=8, fetch_details=True):
     '''
     Uses Google Places Nearby Search to find actual nearby competitors.
     Returns structured competitor cards with real ratings, price level, and distance.
@@ -5267,30 +5448,29 @@ def nearby_competitors_google(lat, lng, niche, radius_m=1500, limit=8):
             vicinity = p.get('vicinity', '')
             place_id = p.get('place_id', '')
 
-            # Get website via Details call (only for top 4)
+            # Get website via Details call (only for top 4). Scout passes
+            # fetch_details=False and enriches after ranking instead.
             website = ''
-            if place_id and len(cards) < 4 and api_budget_ok("google_details"):
-                try:
-                    det = req.get(
-                        'https://maps.googleapis.com/maps/api/place/details/json',
-                        params={'place_id': place_id, 'fields': 'website,formatted_phone_number', 'key': key},
-                        timeout=4
-                    ).json()
-                    website = det.get('result', {}).get('website', '')
-                except Exception as e:
-                    log_error("Google Places details", e)
-                    pass
+            phone   = ''
+            if fetch_details and place_id and len(cards) < 4 and api_budget_ok("google_details"):
+                _det = fetch_google_place_details(place_id, timeout=4)
+                if _det:
+                    website = _det['website']
+                    phone   = _det['phone']
 
             cards.append({
-                'name':         name,
-                'rating':       rating,
-                'review_count': reviews,
-                'price_level':  price,
-                'address':      vicinity,
-                'website':      website,
-                'open_now':     open_now,
-                'platform':     'google_nearby',
-                'url':          website or '',  # No fallback to Google search
+                'name':            name,
+                'rating':          rating,
+                'review_count':    reviews,
+                'price_level':     price,
+                'address':         vicinity,
+                'website':         website,
+                'open_now':        open_now,
+                'platform':        'google_nearby',
+                'url':             website or '',  # No fallback to Google search
+                'place_id':        place_id,
+                'business_status': p.get('business_status', '') or '',
+                'phone':           phone,
             })
         print(f'  -> Nearby competitors: {len(cards)} within {radius_m}m')
         return cards
@@ -5461,6 +5641,14 @@ def _generate_quick_insight(candidate: dict, mode: str) -> str:
     """
     if not candidate:
         return ""
+
+    # Unchecked fields are never described as missing (Milestone 1)
+    if not all(_is_checked(candidate, f) for f in ("website", "social", "booking")):
+        _r = float(candidate.get("rating") or candidate.get("google_rating") or 0)
+        _n = int(candidate.get("review_count") or candidate.get("google_review_count") or 0)
+        if _r >= 4.5 and _n >= 50:
+            return "Proven local demand. Website, booking and social not checked yet."
+        return "Listing found. Website, booking and social not checked yet - run Analyze to confirm."
 
     has_website = bool((candidate.get("website") or "").strip())
     has_social  = any(candidate.get(k) for k in ("instagram_url","instagram","facebook_url","facebook","tiktok"))
@@ -5675,25 +5863,34 @@ def prospect():
         lat, lng = geocode_business(None, None, location)
         if lat and lng:
             radius_m = int(radius_miles * 1609)
-            nearby_cards = nearby_competitors_google(lat, lng, niche, radius_m, limit=min(fetch_limit, 40))
+            # fetch_details=False: rank first on search-response fields, enrich
+            # the shown cards afterward (Milestone 1).
+            nearby_cards = nearby_competitors_google(lat, lng, niche, radius_m, limit=min(fetch_limit, 40),
+                                                     fetch_details=False)
             for c in nearby_cards:
                 # nearby_competitors_google returns 'name', normalize to 'business_name'
                 raw.append({
-                    "business_name": c.get("name", ""),
-                    "website":       c.get("website") or c.get("url") or "",
-                    "platform":      "google_nearby",
-                    "location":      location,
-                    "industry":      niche,
-                    "rating":        c.get("rating"),
-                    "review_count":  c.get("review_count"),
-                    "address":       c.get("address", ""),
-                    "source":        "google_nearby",
+                    "business_name":   c.get("name", ""),
+                    "website":         c.get("website") or c.get("url") or "",
+                    "platform":        "google_nearby",
+                    "location":        location,
+                    "industry":        niche,
+                    "rating":          c.get("rating"),
+                    "review_count":    c.get("review_count"),
+                    "address":         c.get("address", ""),
+                    "source":          "google_nearby",
+                    "google_place_id": c.get("place_id", ""),
+                    "business_status": c.get("business_status", ""),
+                    "phone":           "",
+                    "website_checked": False,
+                    "social_checked":  False,
+                    "booking_checked": False,
                 })
             used_nearby = True
             print(f"  -> Google Nearby: {len(raw)} candidates")
 
     if not raw:
-        raw = search_google_places(niche, location, limit=fetch_limit)
+        raw = search_google_places(niche, location, limit=fetch_limit, fetch_details=False)
         for r in raw:
             r["source"] = "google_text"
         print(f"  -> Google Places Text: {len(raw)} candidates")
@@ -5798,7 +5995,7 @@ def prospect():
             if strategy == "adjacent_categories":
                 adj_cats = expand_adjacent_categories(niche)
                 for adj in adj_cats[:2]:
-                    _adj_raw = search_google_places(adj, location, limit=6)
+                    _adj_raw = search_google_places(adj, location, limit=6, fetch_details=False)
                     for r in _adj_raw:
                         r["source"] = "adjacent_category"
                         r["discovery_reason"] = "adjacent_category_refresh"
@@ -5827,6 +6024,14 @@ def prospect():
 
         except Exception as _refresh_err:
             log_error("scout refresh strategy", _refresh_err)
+
+    # ── Operating-status gate (Milestone 1) ───────────────────────────────────
+    # Google returns business_status in the search response at no extra cost.
+    # Permanently closed: dropped. Temporarily closed: held back with a reason.
+    # Missing status: not checked, so the business stays.
+    deduped, held_back = apply_operating_status_gate(deduped)
+    if held_back:
+        print(f"  -> Status gate: {len(held_back)} temporarily closed held back", flush=True)
 
     # ── Apply exclusion flags ─────────────────────────────────────────────────
     if "skip_chains" in exclusions:
@@ -5909,6 +6114,15 @@ def prospect():
             log_error("need_score enrichment", _ns_err)
 
     top_results = scored[:limit]
+
+    # ── Enrich shown Google cards (Milestone 1) ───────────────────────────────
+    # Order and every score are already fixed above; this only adds website
+    # and phone as displayed facts. Same ceiling as before: 5 Details calls.
+    try:
+        enrich_shown_google_cards(top_results, max_calls=5)
+    except Exception as _enrich_err:
+        log_error("scout enrichment", _enrich_err)
+
     print(f"  -> Ranked {len(scored)} candidates, returning top {len(top_results)} (mode={mode})")
     if top_results:
         for i, b in enumerate(top_results[:5], 1):
@@ -5939,7 +6153,7 @@ def prospect():
                     "category":            niche,
                     "location":            location,
                     "address":             b.get("address"),
-                    "phone":               None,
+                    "phone":               b.get("phone") or None,
                     "website":             b.get("website"),
                     "google_place_id":     b.get("google_place_id"),
                     "google_rating":       b.get("rating"),
@@ -5951,6 +6165,7 @@ def prospect():
                         "platform":         b.get("platform"),
                         "score_confidence": b.get("score_confidence"),
                         "score_reasons":    b.get("score_reasons") or [],
+                        "website_checked":  b.get("website_checked", True),
                     },
                 })
                 if biz_id and token_hash:
@@ -6004,6 +6219,10 @@ def prospect():
             "why_now":             b.get("why_now", ""),
             # True when this code already saved the business to Network (from saturation rerank)
             "already_saved":       bool((b.get("exposure") or {}).get("already_saved_by_token")),
+            # Milestone 1: display facts from post-ranking enrichment
+            "phone":               b.get("phone") or "",
+            "website_checked":     b.get("website_checked", True),
+            "website_fact":        b.get("website_fact", ""),
         }
         if b.get("refresh_metadata"):
             card["refresh_metadata"] = b["refresh_metadata"]
@@ -6025,6 +6244,7 @@ def prospect():
         "radius_miles": radius_miles if radius_miles else None,
         "count":        len(results),
         "results":      results,
+        "held_back":    held_back,
         "niche_warning":       niche_validation if niche_validation["quality_score"] < 50 else None,
         "input_intelligence":  input_intelligence or None,
         "niche_intelligence":  niche_intelligence or None,
