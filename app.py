@@ -255,6 +255,10 @@ def _env_int(name, default):
 # Anthropic model used for deep analysis. Set CLAUDE_MODEL on Render to switch
 # models without a code change (older IDs are retired and return 404).
 CLAUDE_MODEL = (os.environ.get("CLAUDE_MODEL") or "claude-sonnet-5-5").strip()
+# GPT models are env-configurable so cheaper models can be tried without a code change.
+# GPT_FAST_MODEL: fast analysis. GPT_HELPER_MODEL: deep pipeline extract and validate steps.
+GPT_FAST_MODEL = (os.environ.get("GPT_FAST_MODEL") or "gpt-4o").strip()
+GPT_HELPER_MODEL = (os.environ.get("GPT_HELPER_MODEL") or "gpt-4o").strip()
 
 
 def claude_text(resp):
@@ -1477,7 +1481,7 @@ def run_fast_pipeline(business_name, location, website_pages, social_text, socia
     Replace ALL placeholder text with real analysis from the data above.
     ''')
     r = gpt_client.chat.completions.create(
-        model="gpt-4o",
+        model=GPT_FAST_MODEL,
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0.2,
@@ -2555,7 +2559,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         ''')
 
         r1 = gpt_client.chat.completions.create(
-            model="gpt-4o",
+            model=GPT_HELPER_MODEL,
             messages=[{"role": "user", "content": extract_prompt}],
             response_format={"type": "json_object"},
             temperature=0.1,
@@ -2698,7 +2702,7 @@ def run_full_pipeline(business_name, location, website_pages, social_text,
         ''')
 
         r3 = gpt_client.chat.completions.create(
-            model="gpt-4o",
+            model=GPT_HELPER_MODEL,
             messages=[{"role": "user", "content": format_prompt}],
             response_format={"type": "json_object"},
             temperature=0.15,
