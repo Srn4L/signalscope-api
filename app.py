@@ -7158,10 +7158,12 @@ def prospect():
 
     # ── Discovery tracking - Scout previews, does NOT create Network entries ────
     run_id = None
+    search_id = None
+    shown_biz_ids = []
+    token_raw  = request.headers.get("X-Agent-Token", "")
+    token_hash = hash_token(token_raw) if token_raw else None
     if _DB_AVAILABLE:
         try:
-            token_raw  = request.headers.get("X-Agent-Token", "")
-            token_hash = hash_token(token_raw) if token_raw else None
 
             search_id = save_search({
                 "user_query":           (raw_query or niche)[:500],
@@ -7175,7 +7177,6 @@ def prospect():
             print(f"  [DB] search saved - search_id={search_id}", flush=True)
 
             logged = 0
-            shown_biz_ids = []
             for b in top_results:
                 biz_id = upsert_business({
                     "name":                b.get("business_name"),
@@ -7213,18 +7214,29 @@ def prospect():
 
             print(f"  [DB] discovery tracking done - {logged}/{len(top_results)} events", flush=True)
 
-            # Journey record: the request and every card exactly as shown, in order
-            if journey_service is not None:
-                run_id = journey_service.log_scout_run(
-                    search_id=search_id, token_hash=token_hash,
-                    replay_mode=replay_service.current_mode() if replay_service is not None else "off",
-                    mode=mode, niche=niche, location=location, user_query=raw_query or niche,
-                    meaning=query_meaning, ranking=ranking_strategy, is_refresh=is_refresh,
-                    cards=top_results, business_ids=shown_biz_ids,
-                )
-
         except Exception as _db_err:
             log_error("prospect discovery tracking", _db_err)
+
+    # Journey record: the request and every card returned, in order. Its own
+    # block, so a failure saving the search or a business above never drops it
+    # (search_id and business ids are then simply missing).
+    if _DB_AVAILABLE and journey_service is not None:
+        try:
+            _replay_mode = replay_service.current_mode() if replay_service is not None else "off"
+            _actor = journey_service.actor_for(code_type)
+            _test_flag = (str(request.headers.get("X-Test-Run", "")).strip().lower() in ("1", "true", "yes")
+                          or body.get("test") is True)
+            run_id = journey_service.log_scout_run(
+                client_run_id=body.get("client_run_id"),
+                search_id=search_id, token_hash=token_hash,
+                actor=_actor, is_test=journey_service.is_test_run(_replay_mode, _actor, _test_flag),
+                replay_mode=_replay_mode,
+                mode=mode, niche=niche, location=location, user_query=raw_query or niche,
+                meaning=query_meaning, ranking=ranking_strategy, is_refresh=is_refresh,
+                cards=top_results, business_ids=shown_biz_ids,
+            )
+        except Exception as _journey_err:
+            log_error("journey record", _journey_err)
 
     # ── Build response ────────────────────────────────────────────────────────
     results = []

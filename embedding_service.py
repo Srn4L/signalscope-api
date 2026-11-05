@@ -94,25 +94,30 @@ def _db_session():
     return get_db_session()
 
 
-def _ensure_table(session):
+def _ensure_table():
+    """
+    Create the table in its own transaction and mark it ready only after it
+    commits (a rolled-back write must not leave it marked ready).
+    """
     global _TABLE_READY
     if _TABLE_READY:
         return
     from sqlalchemy import text
-    session.execute(text("""
-        CREATE TABLE IF NOT EXISTS query_embeddings (
-            text_hash        TEXT PRIMARY KEY,
-            kind             TEXT,
-            model            TEXT,
-            text             TEXT,
-            embedding        JSONB,
-            matches          JSONB,
-            catalog_version  TEXT,
-            seen_count       INTEGER DEFAULT 1,
-            created_at       TIMESTAMP DEFAULT NOW(),
-            last_seen_at     TIMESTAMP DEFAULT NOW()
-        )
-    """))
+    with _db_session() as session:
+        session.execute(text("""
+            CREATE TABLE IF NOT EXISTS query_embeddings (
+                text_hash        TEXT PRIMARY KEY,
+                kind             TEXT,
+                model            TEXT,
+                text             TEXT,
+                embedding        JSONB,
+                matches          JSONB,
+                catalog_version  TEXT,
+                seen_count       INTEGER DEFAULT 1,
+                created_at       TIMESTAMP DEFAULT NOW(),
+                last_seen_at     TIMESTAMP DEFAULT NOW()
+            )
+        """))
     _TABLE_READY = True
 
 
@@ -122,8 +127,8 @@ def _db_get(hashes):
         return {}
     try:
         from sqlalchemy import text
+        _ensure_table()
         with _db_session() as s:
-            _ensure_table(s)
             rows = s.execute(text(
                 "SELECT text_hash, embedding FROM query_embeddings WHERE text_hash = ANY(:h)"
             ), {"h": list(hashes)}).fetchall()
@@ -144,8 +149,8 @@ def _db_put(rows):
         return
     try:
         from sqlalchemy import text
+        _ensure_table()
         with _db_session() as s:
-            _ensure_table(s)
             for h, kind, txt, vec in rows:
                 s.execute(text("""
                     INSERT INTO query_embeddings (text_hash, kind, model, text, embedding)
@@ -160,8 +165,8 @@ def record_match(query_text: str, matches: dict):
     """Remember what a search matched (feeds the search log). Never raises."""
     try:
         from sqlalchemy import text
+        _ensure_table()
         with _db_session() as s:
-            _ensure_table(s)
             s.execute(text("""
                 UPDATE query_embeddings
                 SET matches = CAST(:mt AS JSONB), catalog_version = :v,
@@ -172,7 +177,29 @@ def record_match(query_text: str, matches: dict):
         _store_error("write", e)
 
 
+def delete_texts(texts) -> int:
+    """Remove the cached embeddings of these search texts (memory and table)."""
+    hashes = [_hash(t) for t in texts or [] if t]
+    if not hashes:
+        return 0
+    with _LOCK:
+        for h in hashes:
+            _MEM.pop(h, None)
+    try:
+        from sqlalchemy import text
+        _ensure_table()
+        with _db_session() as s:
+            r = s.execute(text("DELETE FROM query_embeddings WHERE text_hash = ANY(:h) AND kind = 'query'"),
+                          {"h": hashes})
+            return r.rowcount or 0
+    except Exception as e:
+        _store_error("delete", e)
+        return 0
+
+
 def _store_error(what, e):
+    global _TABLE_READY
+    _TABLE_READY = False          # next call re-checks the table
     STATS["errors"] += 1
     if STATS["errors"] in (1, 10, 100):
         print(f"[Embed] store {what} unavailable ({str(e)[:80]}); memory only", flush=True)
