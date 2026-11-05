@@ -248,3 +248,111 @@ def test_query_embeddings_round_trip_and_recovery(pg_es):
     es._db_put([(h, "query", "jollof in the bronx", [0.5])])          # fails, resets the flag
     es._db_put([(h, "query", "jollof in the bronx", [0.5])])          # recreates and writes
     assert es._db_get([h]) == {h: [0.5]}
+
+
+# ── concurrency: logging and deletion for one access code are serialized ──
+
+import threading  # noqa: E402
+
+
+def _count_runs(db, text, token):
+    with db.get_db_session() as s:
+        return s.execute(text("SELECT COUNT(*) FROM scout_runs WHERE token_hash = :t"), {"t": token}).scalar()
+
+
+def test_run_that_waits_on_an_uncommitted_deletion_is_not_left_behind(pg_es, monkeypatch):
+    js, es, db, text = pg_es
+    _log(js, token_hash="tok-race", user_query="first search")
+    started = time.time() - 5                               # this request began before the deletion
+    in_delete, release = threading.Event(), threading.Event()
+    real = es.tombstone_keys
+
+    def slow(session, keys):                                # deletion holds its transaction open
+        n = real(session, keys)
+        in_delete.set()
+        release.wait(5)
+        return n
+    monkeypatch.setattr(es, "tombstone_keys", slow)
+    out = {}
+    d = threading.Thread(target=lambda: out.setdefault("del", js.delete_for_token("tok-race")))
+    d.start()
+    assert in_delete.wait(5)
+    w = threading.Thread(target=lambda: out.setdefault("run", _log(js, token_hash="tok-race",
+                                                                    user_query="second", started_at=started)))
+    w.start()
+    w.join(0.5)
+    assert w.is_alive()                                      # blocked on the per-code lock
+    release.set()
+    d.join(5)
+    w.join(5)
+    assert out["del"]["ok"] is True and out["run"] is None
+    assert _count_runs(db, text, "tok-race") == 0
+
+
+def test_deletion_that_waits_on_an_uncommitted_run_removes_it(pg_es, monkeypatch):
+    js, es, db, text = pg_es
+    in_log, release = threading.Event(), threading.Event()
+    real = js.stored_card
+
+    def slow(card, bid):                                    # the run holds its transaction open
+        in_log.set()
+        release.wait(5)
+        return real(card, bid)
+    monkeypatch.setattr(js, "stored_card", slow)
+    out = {}
+    w = threading.Thread(target=lambda: out.setdefault("run", _log(js, token_hash="tok-race2",
+                                                                    cards=[GOOGLE_CARD], business_ids=[1])))
+    w.start()
+    assert in_log.wait(5)
+    d = threading.Thread(target=lambda: out.setdefault("del", js.delete_for_token("tok-race2")))
+    d.start()
+    d.join(0.5)
+    assert d.is_alive()                                      # waits for the run to commit
+    release.set()
+    w.join(5)
+    d.join(5)
+    assert out["run"] is not None and out["del"] == {"ok": True, "runs": 1, "returned_results": 1,
+                                                     "embeddings": 1}
+    assert _count_runs(db, text, "tok-race2") == 0
+
+
+def test_deletion_during_a_first_ever_search_catches_its_embedding(pg_es):
+    js, es, db, text = pg_es
+    q = "where can I find suya near me tonight"
+    key = es.cache_key(q)
+    started = time.time() - 2
+    assert js.register_query_key("tok-new", q, started_at=started) is True   # search begins, no run yet
+    counts = js.delete_for_token("tok-new")
+    assert counts == {"ok": True, "runs": 0, "returned_results": 0, "embeddings": 1}
+    # The search finishes after the deletion: its embedding can't be kept
+    es._db_put([(key, "query", q, [0.3])])
+    es._MEM.clear()
+    assert es._db_get([key]) == {} and key in es._recently_deleted([key])
+    with db.get_db_session() as s:
+        assert s.execute(text("SELECT COUNT(*) FROM journey_embed_keys WHERE token_hash = 'tok-new'")).scalar() == 0
+        assert s.execute(text("SELECT text FROM query_embeddings WHERE text_hash = :h"), {"h": key}).scalar() is None
+    # ...and its run isn't recorded either; a search started later is blocked from nothing
+    assert _log(js, token_hash="tok-new", user_query=q, started_at=started) is None
+    assert js.register_query_key("tok-new", q, started_at=started) is False
+
+
+def test_upgrade_from_the_pr38_table_adds_deleted_at(pg_es):
+    js, es, db, text = pg_es
+    with db.get_db_session() as s:                          # the table as #38 created it
+        s.execute(text("""
+            CREATE TABLE query_embeddings (
+                text_hash TEXT PRIMARY KEY, kind TEXT, model TEXT, text TEXT, embedding JSONB,
+                matches JSONB, catalog_version TEXT, seen_count INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT NOW(), last_seen_at TIMESTAMP DEFAULT NOW())
+        """))
+        s.execute(text("INSERT INTO query_embeddings (text_hash, kind, model, text, embedding) "
+                       "VALUES ('k1', 'query', 'm', 'old text', CAST('[0.1]' AS JSONB))"))
+    es._TABLE_READY = False
+    es._ensure_table()
+    es._TABLE_READY = False
+    es._ensure_table()                                      # idempotent
+    with db.get_db_session() as s:
+        cols = [r[0] for r in s.execute(text("SELECT column_name FROM information_schema.columns "
+                                             "WHERE table_name = 'query_embeddings'")).fetchall()]
+    assert "deleted_at" in cols
+    assert es._db_get(["k1"]) == {"k1": [0.1]}              # old rows still readable

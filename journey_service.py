@@ -113,12 +113,71 @@ def _ensure_tables():
         """))
         s.execute(text("CREATE INDEX IF NOT EXISTS returned_results_run_idx ON returned_results (run_id)"))
         s.execute(text("""
+            CREATE TABLE IF NOT EXISTS journey_embed_keys (
+                token_hash  TEXT,
+                embed_key   TEXT,
+                created_at  TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (token_hash, embed_key)
+            )
+        """))
+        s.execute(text("""
             CREATE TABLE IF NOT EXISTS journey_deleted_tokens (
                 token_hash  TEXT PRIMARY KEY,
                 deleted_at  TIMESTAMP DEFAULT NOW()
             )
         """))
     _TABLES_READY = True
+
+
+def _lock_token(session, token_hash):
+    """
+    Transaction-level lock per access code. Logging and deletion for the
+    same code take it first, so they run one after the other: a run is
+    either committed before a deletion starts (and deleted by it) or checks
+    the tombstone after the deletion committed (and is skipped).
+    """
+    if token_hash:
+        from sqlalchemy import text
+        session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                        {"k": "yelhao-journey:" + token_hash})
+
+
+_TOMBSTONED_SINCE = """
+    SELECT 1 FROM journey_deleted_tokens d
+    WHERE d.token_hash = :th AND d.deleted_at >= to_timestamp(:started)
+"""
+
+
+def register_query_key(token_hash, user_query, started_at=None) -> bool:
+    """
+    Before any embedding work: tie the exact embedding key of this search
+    text to the access code, so a deletion during a first-ever search still
+    finds it. Returns False when the code was deleted after this request
+    started (the caller should skip embedding). True otherwise, including
+    when there is no access code or the database is unavailable.
+    """
+    if not token_hash or not user_query:
+        return True
+    try:
+        import embedding_service as es
+        key = es.cache_key(user_query)
+        _ensure_tables()
+        from sqlalchemy import text
+        started = started_at if started_at is not None else time.time()
+        with _db_session() as s:
+            _lock_token(s, token_hash)
+            if s.execute(text(_TOMBSTONED_SINCE), {"th": token_hash, "started": float(started)}).scalar():
+                return False
+            s.execute(text("""
+                INSERT INTO journey_embed_keys (token_hash, embed_key) VALUES (:t, :k)
+                ON CONFLICT DO NOTHING
+            """), {"t": token_hash, "k": key})
+        return True
+    except Exception as e:
+        STATS["errors"] += 1
+        if STATS["errors"] in (1, 10, 100):
+            print(f"[Journey] query key unavailable ({str(e)[:80]})", flush=True)
+        return True
 
 
 def run_kind(replay_mode: str) -> str:
@@ -190,6 +249,7 @@ def log_scout_run(*, client_run_id=None, search_id, token_hash, actor="unknown",
         except Exception:
             ekey = None
         with _db_session() as s:
+            _lock_token(s, token_hash)
             run_id = s.execute(text("""
                 INSERT INTO scout_runs (client_run_id, search_id, token_hash, actor, is_test, run_kind,
                                         mode, niche, location, user_query, embed_key, meaning, ranking,
@@ -255,6 +315,7 @@ def delete_for_token(token_hash: str) -> dict:
         es._ensure_table()
         from sqlalchemy import text
         with _db_session() as s:
+            _lock_token(s, token_hash)
             s.execute(text("""
                 INSERT INTO journey_deleted_tokens (token_hash, deleted_at) VALUES (:t, NOW())
                 ON CONFLICT (token_hash) DO UPDATE SET deleted_at = NOW()
@@ -262,8 +323,12 @@ def delete_for_token(token_hash: str) -> dict:
             rows = s.execute(text("SELECT id, embed_key FROM scout_runs WHERE token_hash = :t"),
                              {"t": token_hash}).fetchall()
             ids = [r[0] for r in rows]
-            keys = sorted({r[1] for r in rows if r[1]})
+            # Keys of finished runs and of searches still in progress
+            pending = s.execute(text("SELECT embed_key FROM journey_embed_keys WHERE token_hash = :t"),
+                                {"t": token_hash}).fetchall()
+            keys = sorted({r[1] for r in rows if r[1]} | {r[0] for r in pending if r[0]})
             counts["embeddings"] = es.tombstone_keys(s, keys)
+            s.execute(text("DELETE FROM journey_embed_keys WHERE token_hash = :t"), {"t": token_hash})
             if ids:
                 counts["returned_results"] = s.execute(text(
                     "DELETE FROM returned_results WHERE run_id = ANY(:ids)"), {"ids": ids}).rowcount or 0

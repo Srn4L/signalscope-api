@@ -130,6 +130,8 @@ def _ensure_table():
                 deleted_at       TIMESTAMP
             )
         """))
+        # Tables first created by PR #38 lack deleted_at: add it (idempotent)
+        session.execute(text("ALTER TABLE query_embeddings ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP"))
     _TABLE_READY = True
 
 
@@ -225,11 +227,15 @@ def tombstone_keys(session, keys) -> int:
     if not keys:
         return 0
     from sqlalchemy import text
+    # Upsert: a key whose embedding is still being made (no row yet) gets a
+    # tombstone too, so the in-flight request can't store it afterwards.
     r = session.execute(text("""
-        UPDATE query_embeddings
-        SET embedding = NULL, text = NULL, matches = NULL, deleted_at = NOW()
-        WHERE text_hash = ANY(:h) AND kind = 'query'
-    """), {"h": keys})
+        INSERT INTO query_embeddings (text_hash, kind, model, deleted_at)
+        SELECT k, 'query', :m, NOW() FROM unnest(CAST(:h AS TEXT[])) AS k
+        ON CONFLICT (text_hash) DO UPDATE
+            SET embedding = NULL, text = NULL, matches = NULL, deleted_at = NOW()
+            WHERE query_embeddings.kind = 'query'
+    """), {"h": keys, "m": EMBED_MODEL})
     forget_local(keys)
     return r.rowcount or 0
 

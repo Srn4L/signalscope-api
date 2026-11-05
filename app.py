@@ -7053,9 +7053,17 @@ def prospect():
     # Meaning match: what types the user's words are about (embeddings,
     # ranking only; never changes the Google query or any card fact)
     query_meaning = None
-    if embedding_service is not None:
+    _meaning_text = raw_query or niche
+    _token_for_keys = request.headers.get("X-Agent-Token", "")
+    _meaning_allowed = True
+    if embedding_service is not None and journey_service is not None and _DB_AVAILABLE and _token_for_keys:
+        # Tie this text's embedding key to the access code before embedding,
+        # so a deletion during this (maybe first) search still finds it
+        _meaning_allowed = journey_service.register_query_key(
+            hash_token(_token_for_keys), _meaning_text, started_at=_scout_started)
+    if embedding_service is not None and _meaning_allowed:
         try:
-            query_meaning = embedding_service.match_query(raw_query or niche, budget_ok=api_budget_ok)
+            query_meaning = embedding_service.match_query(_meaning_text, budget_ok=api_budget_ok)
             if query_meaning.get("terms"):
                 print(f"  -> Meaning match: {query_meaning['terms']} {query_meaning.get('top')}", flush=True)
         except Exception as _em_err:
