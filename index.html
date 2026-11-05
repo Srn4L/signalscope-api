@@ -1109,6 +1109,10 @@ h1 em{color:var(--accent);font-style:normal;position:relative;}
 .scout-card-source-link{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);border:1px solid var(--border2);border-radius:3px;padding:2px 7px;text-decoration:none;transition:all .15s;display:inline-block;}
 .scout-card-source-link:hover{border-color:var(--accent);background:var(--accent-dim);}
 .scout-card-rating{font-size:10px;color:var(--amber);letter-spacing:.04em;}
+.scout-fact{font-size:10px;color:var(--muted);letter-spacing:.04em;border:1px solid var(--border);border-radius:3px;padding:1px 6px;}
+.scout-fact.open{color:var(--accent);border-color:var(--border2);}
+.scout-fact.warn{color:var(--red);border-color:var(--red);}
+.scout-fact.seen{color:var(--muted2);border-style:dashed;}
 .scout-card-right{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;}
 
 /* Opportunity score display */
@@ -4894,6 +4898,23 @@ function renderScoutResults(data) {
       </div>`).join('');
 
     const ratingStr = biz.rating ? `★ ${biz.rating}${biz.review_count ? ` (${biz.review_count})` : ''}` : '';
+
+    // Facts from the search response: shown only when the backend has them
+    const factChips = [];
+    if (biz.price_level) factChips.push(`<span class="scout-fact" title="Google price level">${esc(biz.price_level)}</span>`);
+    if (biz.open_now === true)  factChips.push(`<span class="scout-fact open">Open now</span>`);
+    if (biz.open_now === false) factChips.push(`<span class="scout-fact">Closed now</span>`);
+    const area = biz.area_check || null;
+    // "Address is in X" is already visible in the address line: only flag "far"
+    if (area && area.level === 'far') factChips.push(`<span class="scout-fact warn" title="${esc(area.reason || '')}">Possibly outside area</span>`);
+    const seen = biz.seen_before || null;
+    if (seen) {
+      const when = seen.last_seen_at ? new Date(seen.last_seen_at) : null;
+      const whenStr = when && !isNaN(when) ? ` · last ${when.toLocaleDateString(undefined, {month: 'short', day: 'numeric'})}` : '';
+      const label = seen.saved ? 'Saved before' : `Seen ${seen.count}×`;
+      factChips.push(`<span class="scout-fact seen" title="You were shown this business before${esc(whenStr)}">${label}</span>`);
+    }
+    const factHtml = factChips.join('');
     const addressStr = biz.address ? biz.address.split(',').slice(0,2).join(',') : (biz.location || '');
 
     const leadPayload = JSON.stringify({
@@ -4976,6 +4997,7 @@ function renderScoutResults(data) {
           <div class="scout-card-meta">
             ${addressStr ? `<span class="scout-card-address">${esc(addressStr)}</span>` : ''}
             ${ratingStr  ? `<span class="scout-card-rating">${esc(ratingStr)}</span>` : ''}
+            ${factHtml}
             ${laneHtml}
             ${needHtml}
             ${freshHtml}
