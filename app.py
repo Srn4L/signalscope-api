@@ -219,6 +219,13 @@ except Exception as _embed_import_err:
     print(f"[WARN] embedding_service unavailable: {_embed_import_err}", flush=True)
     embedding_service = None
 
+# --- JOURNEY RECORDS (what each Scout run showed) ---------------------------
+try:
+    import journey_service
+except Exception as _journey_import_err:
+    print(f"[WARN] journey_service unavailable: {_journey_import_err}", flush=True)
+    journey_service = None
+
 # --- DEV REPLAY (testing only, off unless YELHAO_DEV_REPLAY=1) --------------
 try:
     import replay_service
@@ -7150,6 +7157,7 @@ def prospect():
     sys.stdout.flush()
 
     # ── Discovery tracking - Scout previews, does NOT create Network entries ────
+    run_id = None
     if _DB_AVAILABLE:
         try:
             token_raw  = request.headers.get("X-Agent-Token", "")
@@ -7167,6 +7175,7 @@ def prospect():
             print(f"  [DB] search saved - search_id={search_id}", flush=True)
 
             logged = 0
+            shown_biz_ids = []
             for b in top_results:
                 biz_id = upsert_business({
                     "name":                b.get("business_name"),
@@ -7188,6 +7197,7 @@ def prospect():
                         "website_checked":  b.get("website_checked", True),
                     },
                 })
+                shown_biz_ids.append(biz_id)
                 # A saved-data replay is a test rerun, not a real showing, so it
                 # does not add exposure history.
                 if biz_id and token_hash and not _replay_is_saved_run():
@@ -7202,6 +7212,16 @@ def prospect():
                     logged += 1
 
             print(f"  [DB] discovery tracking done - {logged}/{len(top_results)} events", flush=True)
+
+            # Journey record: the request and every card exactly as shown, in order
+            if journey_service is not None:
+                run_id = journey_service.log_scout_run(
+                    search_id=search_id, token_hash=token_hash,
+                    replay_mode=replay_service.current_mode() if replay_service is not None else "off",
+                    mode=mode, niche=niche, location=location, user_query=raw_query or niche,
+                    meaning=query_meaning, ranking=ranking_strategy, is_refresh=is_refresh,
+                    cards=top_results, business_ids=shown_biz_ids,
+                )
 
         except Exception as _db_err:
             log_error("prospect discovery tracking", _db_err)
@@ -7285,6 +7305,8 @@ def prospect():
         "ranking_strategy":    ranking_strategy,
         # Which business types the search was matched to by meaning (debug/tuning)
         "query_meaning":       query_meaning,
+        # Journey record id for this run (feedback and visits link to it)
+        "run_id":              run_id,
         "result_mix":          lane_counts,
         "world_cup_context":   None,  # World Cup removed; field kept for frontend compatibility
         "refresh": {

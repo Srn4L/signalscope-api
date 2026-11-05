@@ -14,6 +14,7 @@ pytestmark = pytest.mark.skipif(not URL, reason="set REPLAY_TEST_DATABASE_URL to
 
 @pytest.fixture(scope="module")
 def pg():
+    before = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = URL
     import importlib
     import db
@@ -24,6 +25,13 @@ def pg():
     with db.get_db_session() as s:
         s.execute(text("DROP TABLE IF EXISTS dev_replay_cache"))
     yield rs, db, text
+    # Later test files must not count API calls or read replay data in this database
+    if before is None:
+        os.environ.pop("DATABASE_URL", None)
+    else:
+        os.environ["DATABASE_URL"] = before
+    importlib.reload(db)
+    rs._TABLE_READY = False
 
 
 def test_table_is_created_on_first_use_and_survives_a_restart(pg):
