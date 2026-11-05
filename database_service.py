@@ -108,6 +108,18 @@ def save_search(search_data: dict) -> int | None:
 # ---------------------------------------------------------------------------
 
 def upsert_business(business_data: dict) -> int | None:
+    # Every Scout run and Networks save comes through here: keep only what
+    # the source rules allow. The incoming name and location are used for
+    # matching only, never stored for sources that may not keep names.
+    match_name = (business_data.get("name") or "").strip()
+    match_location = (business_data.get("location") or "").strip()
+    try:
+        from source_rules import business_fields
+        business_data = business_fields(business_data)
+    except Exception as _rules_err:
+        print(f"[DB] upsert_business: source rules unavailable ({_rules_err}); not saving", flush=True)
+        return None
+    ikey = (business_data.get("raw_data") or {}).get("identity_key") or ""
     gp_id = (business_data.get("google_place_id") or "").strip() or None
 
     try:
@@ -142,20 +154,22 @@ def upsert_business(business_data: dict) -> int | None:
                 row = session.execute(sql, _build_params(business_data)).fetchone()
                 return row[0] if row else None
 
-            name     = (business_data.get("name") or "").strip()
-            location = (business_data.get("location") or "").strip()
-
-            if not name:
+            if not ikey:
                 print("[DB] upsert_business: no name provided, skipping.", flush=True)
                 return None
 
+            # Match by identity key; fall back to a legacy row that still has
+            # the name (rows written before the source rules)
             check = text("""
                 SELECT id FROM businesses
-                WHERE LOWER(name) = LOWER(:name)
-                  AND LOWER(location) = LOWER(:location)
+                WHERE raw_data->>'identity_key' = :ik
+                   OR (name <> '' AND LOWER(name) = LOWER(:name)
+                       AND LOWER(COALESCE(location, '')) = LOWER(:location))
+                ORDER BY (raw_data->>'identity_key' = :ik) DESC NULLS LAST, id
                 LIMIT 1
             """)
-            existing = session.execute(check, {"name": name, "location": location}).fetchone()
+            existing = session.execute(check, {"ik": ikey, "name": match_name,
+                                               "location": match_location}).fetchone()
 
             if existing:
                 upd = text("""
@@ -771,6 +785,19 @@ def save_scout_result_to_network(result_data: dict, token_hash: str) -> dict:
     source = result_data.get("source") or result_data.get("platform") or ""
 
     score_reasons = result_data.get("score_reasons") or []
+    # Source rules: text and scores built from provider data are not kept
+    # for sources that may not keep content (all sources today)
+    try:
+        from source_rules import rule_for, reason_keys
+        _keep_text = bool(rule_for(source)["content"])
+    except Exception:
+        reason_keys, _keep_text = None, False
+    if not _keep_text:
+        score_reasons = reason_keys(score_reasons) if reason_keys else []
+        result_data = {k: v for k, v in result_data.items()
+                       if k not in ("why_it_fits", "problem_detected", "signals", "opportunity_fit_score",
+                                    "opportunity_score", "score_confidence", "key_weakness",
+                                    "primary_problem")}
     if score_reasons and isinstance(score_reasons[0], dict):
         why_it_fits = "; ".join(r.get("signal", "") for r in score_reasons if r.get("signal"))
         problem     = score_reasons[0].get("signal") if score_reasons else None
