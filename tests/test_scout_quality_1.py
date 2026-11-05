@@ -90,16 +90,30 @@ def test_broad_beauty_salon_is_not_ruled_out():
 
 
 def test_google_type_confirms_match():
+    # Google searched with a broad word ("salon"): the type adds evidence
     shop = _gcard("Blonde Me", ["hair_care", "beauty_salon"], source="google_nearby")
-    app.apply_geoapify_query_match([shop], "hair salon", "hair salons in Astoria")
+    app.apply_geoapify_query_match([shop], "salon", "hair salons in Astoria")
     assert shop["query_match"]["level"] == "tag"
     assert shop["opportunity_score"] == 72
 
 
 def test_name_still_counts_on_google_cards():
     c = _gcard("Lucky Nails & Hair", ["hair_care"])
-    app.apply_geoapify_query_match([c], "nail salon", "nail salons")
+    app.apply_geoapify_query_match([c], "salon", "nail salons")
     assert c["query_match"]["level"] == "name"
+    assert c["opportunity_score"] == 70
+
+
+def test_match_on_the_searched_type_adds_nothing_on_google_cards():
+    # Google was searched "nail salon": a name saying nail only repeats Google's pick
+    c = _gcard("Lucky Nails", ["beauty_salon"])
+    app.apply_geoapify_query_match([c], "nail salon", "nail salons in Astoria")
+    assert c["query_match"]["level"] == "name"
+    assert c["opportunity_score"] == 60 and c["score_reasons"] == []
+    # A different type is still ranked down
+    barber = _gcard("Boris Cuts", ["hair_care"])
+    app.apply_geoapify_query_match([barber], "nail salon", "nail salons in Astoria")
+    assert barber["opportunity_score"] == 48
 
 
 # ── Area check ─────────────────────────────────────────────────────────────
