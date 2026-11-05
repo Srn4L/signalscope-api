@@ -219,6 +219,13 @@ except Exception as _embed_import_err:
     print(f"[WARN] embedding_service unavailable: {_embed_import_err}", flush=True)
     embedding_service = None
 
+# --- JOURNEY RECORDS (what each Scout run showed) ---------------------------
+try:
+    import journey_service
+except Exception as _journey_import_err:
+    print(f"[WARN] journey_service unavailable: {_journey_import_err}", flush=True)
+    journey_service = None
+
 # --- DEV REPLAY (testing only, off unless YELHAO_DEV_REPLAY=1) --------------
 try:
     import replay_service
@@ -6728,6 +6735,7 @@ def prospect():
     }
     '''
     body = request.get_json(force=True, silent=True) or {}
+    _scout_started = time.time()
     is_demo = bool(body.get('demo'))
 
     if is_demo and not request.headers.get('X-Agent-Token'):
@@ -7045,9 +7053,26 @@ def prospect():
     # Meaning match: what types the user's words are about (embeddings,
     # ranking only; never changes the Google query or any card fact)
     query_meaning = None
-    if embedding_service is not None:
+    _meaning_text = raw_query or niche
+    _token_for_keys = request.headers.get("X-Agent-Token", "")
+    _meaning_allowed = True
+    if embedding_service is not None and _token_for_keys:
+        # An authenticated query is embedded only after its exact key is tied
+        # to the access code, so deletion can always find it. If that can't be
+        # done (journey tracking or the database unavailable, registration
+        # failed, or the code was deleted), skip meaning matching for this
+        # request; the ordinary search still runs.
+        _meaning_allowed = False
+        if journey_service is not None and _DB_AVAILABLE:
+            try:
+                _meaning_allowed = journey_service.register_query_key(
+                    hash_token(_token_for_keys), _meaning_text, started_at=_scout_started)
+            except Exception as _reg_err:
+                log_error("query key registration", _reg_err)
+                _meaning_allowed = False
+    if embedding_service is not None and _meaning_allowed:
         try:
-            query_meaning = embedding_service.match_query(raw_query or niche, budget_ok=api_budget_ok)
+            query_meaning = embedding_service.match_query(_meaning_text, budget_ok=api_budget_ok)
             if query_meaning.get("terms"):
                 print(f"  -> Meaning match: {query_meaning['terms']} {query_meaning.get('top')}", flush=True)
         except Exception as _em_err:
@@ -7150,10 +7175,13 @@ def prospect():
     sys.stdout.flush()
 
     # ── Discovery tracking - Scout previews, does NOT create Network entries ────
+    run_id = None
+    search_id = None
+    shown_biz_ids = []
+    token_raw  = request.headers.get("X-Agent-Token", "")
+    token_hash = hash_token(token_raw) if token_raw else None
     if _DB_AVAILABLE:
         try:
-            token_raw  = request.headers.get("X-Agent-Token", "")
-            token_hash = hash_token(token_raw) if token_raw else None
 
             search_id = save_search({
                 "user_query":           (raw_query or niche)[:500],
@@ -7188,6 +7216,7 @@ def prospect():
                         "website_checked":  b.get("website_checked", True),
                     },
                 })
+                shown_biz_ids.append(biz_id)
                 # A saved-data replay is a test rerun, not a real showing, so it
                 # does not add exposure history.
                 if biz_id and token_hash and not _replay_is_saved_run():
@@ -7205,6 +7234,27 @@ def prospect():
 
         except Exception as _db_err:
             log_error("prospect discovery tracking", _db_err)
+
+    # Journey record: the request and every card returned, in order. Its own
+    # block, so a failure saving the search or a business above never drops it
+    # (search_id and business ids are then simply missing).
+    if _DB_AVAILABLE and journey_service is not None:
+        try:
+            _replay_mode = replay_service.current_mode() if replay_service is not None else "off"
+            _actor = journey_service.actor_for(code_type)
+            _test_flag = (str(request.headers.get("X-Test-Run", "")).strip().lower() in ("1", "true", "yes")
+                          or body.get("test") is True)
+            run_id = journey_service.log_scout_run(
+                client_run_id=body.get("client_run_id"),
+                search_id=search_id, token_hash=token_hash,
+                actor=_actor, is_test=journey_service.is_test_run(_replay_mode, _actor, _test_flag),
+                replay_mode=_replay_mode,
+                mode=mode, niche=niche, location=location, user_query=raw_query or niche,
+                meaning=query_meaning, ranking=ranking_strategy, is_refresh=is_refresh,
+                cards=top_results, business_ids=shown_biz_ids, started_at=_scout_started,
+            )
+        except Exception as _journey_err:
+            log_error("journey record", _journey_err)
 
     # ── Build response ────────────────────────────────────────────────────────
     results = []
@@ -7285,6 +7335,8 @@ def prospect():
         "ranking_strategy":    ranking_strategy,
         # Which business types the search was matched to by meaning (debug/tuning)
         "query_meaning":       query_meaning,
+        # Journey record id for this run (feedback and visits link to it)
+        "run_id":              run_id,
         "result_mix":          lane_counts,
         "world_cup_context":   None,  # World Cup removed; field kept for frontend compatibility
         "refresh": {

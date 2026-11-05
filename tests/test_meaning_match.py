@@ -147,6 +147,14 @@ def test_scout_response_carries_query_meaning(monkeypatch, emb):
                "rating": 4.5, "user_ratings_total": 40, "business_status": "OPERATIONAL",
                "types": ["restaurant"], "geometry": {"location": {"lat": 40.85, "lng": -73.89}}}]
     _setup(monkeypatch, FakeGoogle(places))
+    # Authenticated queries are embedded only after their key is registered
+    import journey_service as js
+    monkeypatch.setattr(app, "_DB_AVAILABLE", True)
+    monkeypatch.setattr(js, "register_query_key", lambda *a, **k: True)
+    monkeypatch.setattr(js, "log_scout_run", lambda **k: None)
+    monkeypatch.setattr(app, "save_search", lambda d: 1)
+    monkeypatch.setattr(app, "upsert_business", lambda d: None)
+    monkeypatch.setattr(app, "_scout_exposure_inputs", lambda *a, **k: ({}, None))
     r = app.app.test_client().post("/prospect", json={
         "niche": "restaurant", "location": "Bronx, NY", "user_query": "jollof spots in the Bronx"},
         headers={"X-Agent-Token": MASTER})

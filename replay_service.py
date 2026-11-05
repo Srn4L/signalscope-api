@@ -244,20 +244,33 @@ def _db_session():
     return get_db_session()
 
 
-def _ensure_table(session):
+def _ensure_table(session=None):
+    """
+    Create the table in its own transaction and mark it ready only after it
+    commits (a rolled-back write must not leave it marked ready). The
+    session argument is ignored; kept so older call sites still work.
+    """
     global _TABLE_READY
     if _TABLE_READY:
         return
     from sqlalchemy import text
-    session.execute(text("""
-        CREATE TABLE IF NOT EXISTS dev_replay_cache (
-            cache_key  TEXT PRIMARY KEY,
-            kind       TEXT,
-            payload    JSONB,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """))
+    with _db_session() as own:
+        own.execute(text("""
+            CREATE TABLE IF NOT EXISTS dev_replay_cache (
+                cache_key  TEXT PRIMARY KEY,
+                kind       TEXT,
+                payload    JSONB,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """))
     _TABLE_READY = True
+
+
+def _table_error():
+    """A failed read or write: re-check the table on the next call."""
+    global _TABLE_READY
+    _TABLE_READY = False
+    STATS["errors"] += 1
 
 
 def get(key: str):
@@ -268,8 +281,8 @@ def get(key: str):
         return hit[0]
     try:
         from sqlalchemy import text
+        _ensure_table()
         with _db_session() as s:
-            _ensure_table(s)
             row = s.execute(text("""
                 SELECT payload, EXTRACT(EPOCH FROM created_at) FROM dev_replay_cache
                 WHERE cache_key = :k
@@ -280,7 +293,7 @@ def get(key: str):
                 _MEM[key] = (payload, float(row[1]))
             return payload
     except Exception as e:
-        STATS["errors"] += 1
+        _table_error()
         if STATS["errors"] in (1, 10, 100):
             print(f"[Replay] store read unavailable ({str(e)[:80]}); memory only", flush=True)
     return None
@@ -292,8 +305,8 @@ def put(key: str, payload: dict):
     STATS["saved"] += 1
     try:
         from sqlalchemy import text
+        _ensure_table()
         with _db_session() as s:
-            _ensure_table(s)
             s.execute(text("""
                 INSERT INTO dev_replay_cache (cache_key, kind, payload, created_at)
                 VALUES (:k, :kind, CAST(:p AS JSONB), NOW())
@@ -301,7 +314,7 @@ def put(key: str, payload: dict):
                     SET payload = EXCLUDED.payload, created_at = NOW()
             """), {"k": key, "kind": key.split(":", 1)[0], "p": json.dumps(payload)})
     except Exception as e:
-        STATS["errors"] += 1
+        _table_error()
         if STATS["errors"] in (1, 10, 100):
             print(f"[Replay] store write unavailable ({str(e)[:80]}); memory only", flush=True)
 
@@ -312,12 +325,12 @@ def delete(key: str) -> bool:
         removed = _MEM.pop(key, None) is not None
     try:
         from sqlalchemy import text
+        _ensure_table()
         with _db_session() as s:
-            _ensure_table(s)
             r = s.execute(text("DELETE FROM dev_replay_cache WHERE cache_key = :k"), {"k": key})
             removed = removed or bool(r.rowcount)
     except Exception as e:
-        STATS["errors"] += 1
+        _table_error()
         if STATS["errors"] in (1, 10, 100):
             print(f"[Replay] store delete unavailable ({str(e)[:80]}); memory only", flush=True)
     return removed
@@ -329,8 +342,8 @@ def clear() -> int:
         _MEM.clear()
     try:
         from sqlalchemy import text
+        _ensure_table()
         with _db_session() as s:
-            _ensure_table(s)
             r = s.execute(text("DELETE FROM dev_replay_cache"))
             n = max(n, r.rowcount or 0)
     except Exception:
