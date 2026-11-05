@@ -213,12 +213,13 @@ except Exception as _intent_import_err:
     _INTENT_AVAILABLE = False
 
 # --- PROVIDER-CONTENT EXPORTS (paused by default) ---------------------------
-# CRM pushes (HubSpot, Salesforce, Airtable, connectors, batch push), the n8n
+# CRM pushes (HubSpot, Salesforce, Airtable, connectors, batch push), CSV
+# export of batch results, the n8n
 # notification and Analyze saves to Networks copy provider content (Google
 # names, phones, websites, ratings, text built from them) into durable or
 # outside records. Paused until those paths follow the source rules.
 PROVIDER_EXPORTS_ENABLED = os.environ.get("PROVIDER_EXPORTS_ENABLED", "0").strip().lower() in ("1", "true", "yes")
-_EXPORTS_PAUSED = ("Paused: CRM exports and Analyze saves are off until they follow "
+_EXPORTS_PAUSED = ("Paused: CRM and CSV exports and Analyze saves are off until they follow "
                    "Yelhao's provider-content rules.")
 
 # --- MEANING MATCH (embeddings; ranking only) --------------------------------
@@ -8450,6 +8451,8 @@ def batch_export(batch_id):
     Accepts token via X-Agent-Token header OR ?token= query param
     (needed for window.open / direct download links).
     """
+    if not PROVIDER_EXPORTS_ENABLED:
+        return jsonify({"ok": False, "error": _EXPORTS_PAUSED}), 403
     code_type = get_code_type(request)
     if code_type is None:
         # Fallback: check query param (for direct download links)

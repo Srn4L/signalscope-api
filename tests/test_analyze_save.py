@@ -212,3 +212,5 @@ def test_paused_crm_routes_refuse(monkeypatch):
     assert r.status_code == 403 and "Paused" in r.get_json()["error"]
     r = c.post("/batch/abc/push_crm", json={}, headers={"X-Agent-Token": "m"})
     assert r.status_code == 403
+    r = c.get("/batch/abc/export", headers={"X-Agent-Token": "m"})
+    assert r.status_code == 403 and "CSV" in r.get_json()["error"]

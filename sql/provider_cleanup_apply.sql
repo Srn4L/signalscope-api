@@ -36,4 +36,13 @@ SET matched_offer = NULL, problem_detected = NULL, why_it_fits = NULL, why_now =
     contact_target = NULL, contact_confidence = NULL, contact_reason = NULL, updated_at = NOW()
 WHERE o.business_id IN (SELECT id FROM _touched);
 
+-- 4. Saturation rows on those businesses that carry contact values (target or
+--    method built from provider phone/website). Their counts are recomputed
+--    from discovery events and states on the next refresh. On 2026-11-05 no
+--    such rows existed (Google rows held 'unknown'); kept for safety.
+DELETE FROM opportunity_saturation s
+WHERE s.business_id IN (SELECT id FROM _touched)
+  AND (COALESCE(s.contact_target, 'unknown') <> 'unknown'
+       OR COALESCE(s.contact_method, 'unknown') <> 'unknown');
+
 COMMIT;

@@ -15,7 +15,7 @@ HERE = os.path.dirname(__file__)
 SQL_DIR = os.path.join(HERE, "..", "sql")
 
 SCHEMA = [
-    "DROP TABLE IF EXISTS opportunity_states, opportunities, discovery_events, businesses CASCADE",
+    "DROP TABLE IF EXISTS opportunity_saturation, opportunity_states, opportunities, discovery_events, businesses CASCADE",
     """CREATE TABLE businesses (
         id SERIAL PRIMARY KEY, name TEXT NOT NULL, category TEXT, location TEXT, address TEXT,
         phone TEXT, website TEXT, google_place_id TEXT UNIQUE, google_rating NUMERIC,
@@ -37,6 +37,13 @@ SCHEMA = [
         contact_method TEXT, last_action TEXT, next_action TEXT, next_action_date TIMESTAMP, notes TEXT,
         message_used TEXT, response_status TEXT, outcome TEXT, created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW(), token_hash TEXT, contact_target TEXT, service_angle TEXT)""",
+    """CREATE TABLE opportunity_saturation (
+        id SERIAL PRIMARY KEY, business_id INTEGER, opportunity_type TEXT, service_angle TEXT,
+        contact_target TEXT, contact_method TEXT, total_discoveries INTEGER, unique_discoverers INTEGER,
+        total_saves INTEGER, unique_savers INTEGER, total_contacted INTEGER, total_replied INTEGER,
+        total_won INTEGER, total_lost INTEGER, last_discovered_at TIMESTAMP, last_saved_at TIMESTAMP,
+        last_contacted_at TIMESTAMP, last_updated_at TIMESTAMP,
+        UNIQUE (business_id, opportunity_type, service_angle, contact_target, contact_method))""",
 ]
 
 
@@ -218,6 +225,12 @@ def test_networks_save_cannot_store_contact_info_or_generated_text(pg, monkeypat
               "suggested_follow_up", "recommended_offer"):
         assert opp[f] is None, f
     assert opp["opportunity_type"] == "outreach" and opp["service_angle"] == "booking"
+    with db.get_db_session() as s:                       # the second write: saturation
+        sat = [dict(r._mapping) for r in s.execute(text(
+            "SELECT contact_target, contact_method FROM opportunity_saturation WHERE business_id = :b"),
+            {"b": out["business_id"]}).fetchall()]
+    assert sat and all(r["contact_target"] == "unknown" and r["contact_method"] == "unknown" for r in sat)
+    assert "555" not in str(sat) and "chris.example" not in str(sat)
     _assert_no_google(_row(db, text, "businesses", out["business_id"]))
 
 
@@ -241,3 +254,20 @@ def test_seen_before_still_works_after_names_are_cleared(pg):
     stats = ds.get_candidate_exposure_stats(
         [{"business_name": "Chris Spa & Nails", "location": "Astoria, NY", "google_place_id": "pid-1"}], "t")
     assert list(stats.values())[0]["seen_count_for_token"] == 1      # matched by place id, not name
+
+
+def test_apply_removes_saturation_rows_with_contact_values(pg):
+    ds, db, text = pg
+    ids = _legacy_rows(db, text)
+    with db.get_db_session() as s:
+        s.execute(text("INSERT INTO opportunity_saturation (business_id, opportunity_type, service_angle, "
+                       "contact_target, contact_method, total_discoveries) VALUES "
+                       "(:g, 'outreach', 'x', 'owner', 'Call (718) 555-0101', 3), "
+                       "(:g, 'outreach', 'y', 'unknown', 'unknown', 2), "
+                       "(:geo, 'outreach', 'x', 'owner', 'dm', 1)"), {"g": ids["g_pid"], "geo": ids["geo"]})
+    rows = {r["id"]: r for r in _run_sql(db, "provider_cleanup_dry_run.sql")}
+    assert rows[ids["g_pid"]]["saturation_rows_to_delete"] == 1
+    _run_sql(db, "provider_cleanup_apply.sql")
+    with db.get_db_session() as s:
+        left = s.execute(text("SELECT business_id, contact_method FROM opportunity_saturation ORDER BY id")).fetchall()
+    assert [tuple(r) for r in left] == [(ids["g_pid"], "unknown"), (ids["geo"], "dm")]

@@ -890,12 +890,14 @@ def save_scout_result_to_network(result_data: dict, token_hash: str) -> dict:
 
         # 5. Refresh saturation for this combination
         try:
+            # Filtered values only: the unfiltered contact fields were built
+            # from provider data and must not reach any other table
             refresh_opportunity_saturation(
                 business_id=biz_id,
-                opportunity_type=mode,
-                service_angle=service_angle,
-                contact_target=contact_target,
-                contact_method=best_contact_path,
+                opportunity_type=_opp_payload.get("opportunity_type") or mode,
+                service_angle=_opp_payload.get("service_angle"),
+                contact_target=_opp_payload.get("contact_target"),
+                contact_method=_opp_payload.get("best_contact_path"),
             )
         except Exception as _sat_err:
             print(f"[DB] saturation refresh skipped: {_sat_err}", flush=True)

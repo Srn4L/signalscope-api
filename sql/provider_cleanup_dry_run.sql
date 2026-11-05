@@ -36,6 +36,9 @@ SELECT
       CASE WHEN b.raw_data ? 'score_confidence' THEN 'raw_data.score_confidence' END)
   END AS fields_to_clear,
   (SELECT COUNT(*) FROM opportunities o WHERE o.business_id = b.id AND b.google_touched) AS opportunities_to_clear,
+  (SELECT COUNT(*) FROM opportunity_saturation s WHERE s.business_id = b.id AND b.google_touched
+     AND (COALESCE(s.contact_target, 'unknown') <> 'unknown'
+          OR COALESCE(s.contact_method, 'unknown') <> 'unknown')) AS saturation_rows_to_delete,
   CASE WHEN b.google_place_id IS NOT NULL THEN 'place_id'
        WHEN b.google_touched THEN 'yelhao id only (no automatic matching until a permitted identifier exists)'
        ELSE 'name+location (unchanged)' END AS identity_after,
