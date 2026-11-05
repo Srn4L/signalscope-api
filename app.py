@@ -7056,11 +7056,20 @@ def prospect():
     _meaning_text = raw_query or niche
     _token_for_keys = request.headers.get("X-Agent-Token", "")
     _meaning_allowed = True
-    if embedding_service is not None and journey_service is not None and _DB_AVAILABLE and _token_for_keys:
-        # Tie this text's embedding key to the access code before embedding,
-        # so a deletion during this (maybe first) search still finds it
-        _meaning_allowed = journey_service.register_query_key(
-            hash_token(_token_for_keys), _meaning_text, started_at=_scout_started)
+    if embedding_service is not None and _token_for_keys:
+        # An authenticated query is embedded only after its exact key is tied
+        # to the access code, so deletion can always find it. If that can't be
+        # done (journey tracking or the database unavailable, registration
+        # failed, or the code was deleted), skip meaning matching for this
+        # request; the ordinary search still runs.
+        _meaning_allowed = False
+        if journey_service is not None and _DB_AVAILABLE:
+            try:
+                _meaning_allowed = journey_service.register_query_key(
+                    hash_token(_token_for_keys), _meaning_text, started_at=_scout_started)
+            except Exception as _reg_err:
+                log_error("query key registration", _reg_err)
+                _meaning_allowed = False
     if embedding_service is not None and _meaning_allowed:
         try:
             query_meaning = embedding_service.match_query(_meaning_text, budget_ok=api_budget_ok)

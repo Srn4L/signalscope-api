@@ -185,3 +185,54 @@ def test_retried_click_runs_again_and_gets_its_own_run(monkeypatch):
     assert [x["business_name"] for x in runs[1]["cards"]] == [x["business_name"] for x in second["results"]]
     assert len(runs[0]["cards"]) == 4 and len(runs[1]["cards"]) == 2
     assert runs[0]["client_run_id"] == runs[1]["client_run_id"] == "click-same-0001"
+
+
+# ── an authenticated query is embedded only after its key is registered ────
+
+def _embed_spy(monkeypatch):
+    calls = []
+    monkeypatch.setattr(es, "match_query", lambda q, budget_ok=None: calls.append(q) or
+                        {"terms": [], "top": [], "status": "no_match"})
+    return calls
+
+
+def test_registration_failure_skips_embedding_but_search_returns(scout, monkeypatch):
+    calls = _embed_spy(monkeypatch)
+    monkeypatch.setattr(js, "_db_session", lambda: (_ for _ in ()).throw(RuntimeError("db down")))
+    monkeypatch.setattr(js, "_TABLES_READY", False)
+    data, _ = scout()
+    assert calls == []                                    # no embedding work
+    assert data["query_meaning"] is None and len(data["results"]) == 4
+
+
+def test_registered_query_is_embedded(scout, monkeypatch):
+    calls = _embed_spy(monkeypatch)
+    monkeypatch.setattr(js, "register_query_key", lambda *a, **k: True)
+    scout()
+    assert calls == ["nail salons in Astoria"]
+
+
+def test_no_journey_tracking_means_no_embedding_for_authenticated_users(monkeypatch):
+    calls = _embed_spy(monkeypatch)
+    _setup(monkeypatch, FakeGoogle(_places()))            # database unavailable
+    r = app.app.test_client().post("/prospect", json={"niche": "nail salon", "location": "Astoria, NY"},
+                                   headers={"X-Agent-Token": MASTER})
+    assert calls == [] and len(r.get_json()["results"]) == 4
+    monkeypatch.setattr(app, "_DB_AVAILABLE", True)
+    monkeypatch.setattr(app, "journey_service", None)
+    monkeypatch.setattr(app, "save_search", lambda d: 1)
+    monkeypatch.setattr(app, "upsert_business", lambda d: None)
+    monkeypatch.setattr(app, "_scout_exposure_inputs", lambda *a, **k: ({}, None))
+    r = app.app.test_client().post("/prospect", json={"niche": "nail salon", "location": "Astoria, NY"},
+                                   headers={"X-Agent-Token": MASTER})
+    assert calls == [] and len(r.get_json()["results"]) == 4
+
+
+def test_registration_raising_never_breaks_the_search(scout, monkeypatch):
+    calls = _embed_spy(monkeypatch)
+
+    def boom(*a, **k):
+        raise RuntimeError("unexpected")
+    monkeypatch.setattr(js, "register_query_key", boom)
+    data, _ = scout()
+    assert calls == [] and len(data["results"]) == 4

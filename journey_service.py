@@ -152,9 +152,10 @@ def register_query_key(token_hash, user_query, started_at=None) -> bool:
     """
     Before any embedding work: tie the exact embedding key of this search
     text to the access code, so a deletion during a first-ever search still
-    finds it. Returns False when the code was deleted after this request
-    started (the caller should skip embedding). True otherwise, including
-    when there is no access code or the database is unavailable.
+    finds it. Returns True only when the key is registered (or there is no
+    access code to tie it to). False when the code was deleted after this
+    request started or registration failed: the caller must then skip
+    embedding work, so no authenticated query is cached untracked.
     """
     if not token_hash or not user_query:
         return True
@@ -177,7 +178,7 @@ def register_query_key(token_hash, user_query, started_at=None) -> bool:
         STATS["errors"] += 1
         if STATS["errors"] in (1, 10, 100):
             print(f"[Journey] query key unavailable ({str(e)[:80]})", flush=True)
-        return True
+        return False
 
 
 def run_kind(replay_mode: str) -> str:
