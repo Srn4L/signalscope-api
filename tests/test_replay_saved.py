@@ -291,3 +291,42 @@ def test_saved_header_needs_the_owner_code():
     with app.app.test_request_context("/prospect", headers={"X-Replay": "saved", "X-Agent-Token": app.MASTER_CODE}):
         app.app.preprocess_request()
         assert rs.current_mode() == "saved"
+
+
+def test_a_later_capture_that_runs_the_step_clears_the_old_skip(net, monkeypatch):
+    # 2026-11-04 Astoria: an afternoon capture skipped Google (cap reached),
+    # an evening capture ran it, and the saved rerun still skipped it and
+    # replayed the old fallback.
+    fake = net(_exa)
+    monkeypatch.setattr(app, "api_budget_ok", lambda provider, amount=1: provider != "exa")
+    rs.set_request_mode("all")
+    app.search_web("cafe Harlem")                          # capture 1: Exa skipped
+    monkeypatch.setattr(app, "api_budget_ok", lambda provider, amount=1: True)
+    rs.set_request_mode("all")
+    second = app.search_web("cafe Harlem")                 # capture 2: Exa runs
+    assert second[0]["provider"] == "exa"
+    rs.set_request_mode("saved")
+    again = app.search_web("cafe Harlem")
+    s = rs.run_state().summary()
+    assert again == second and s["live_calls"] == 0 and s["missing_count"] == 0
+    assert sum(1 for c in fake.calls if "exa.ai" in c[1]) == 1
+
+
+def test_budget_gated_steps_clear_the_old_skip_too(monkeypatch):
+    calls = {"ok": False}
+    monkeypatch.setattr(app, "api_budget_ok", lambda provider, amount=1: calls["ok"])
+    rs.set_request_mode("all")
+    assert app._budget_ok_replayable("google_search", "textsearch", "nail salon", "Astoria, NY") is False
+    calls["ok"] = True
+    assert app._budget_ok_replayable("google_search", "textsearch", "nail salon", "Astoria, NY") is True
+    rs.set_request_mode("saved")
+    assert app._budget_ok_replayable("google_search", "textsearch", "nail salon", "Astoria, NY") is True
+
+
+def test_saved_mode_never_clears_a_skip(monkeypatch):
+    monkeypatch.setattr(app, "api_budget_ok", lambda provider, amount=1: False)
+    rs.set_request_mode("all")
+    app._budget_ok_replayable("google_search", "textsearch", "bakery", "Harlem, NY")
+    rs.set_request_mode("saved")
+    assert rs.clear_skip("google_search", ["textsearch", "bakery", "Harlem, NY"], 0) is False
+    assert app._budget_ok_replayable("google_search", "textsearch", "bakery", "Harlem, NY") is False
