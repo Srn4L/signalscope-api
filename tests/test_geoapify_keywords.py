@@ -103,10 +103,14 @@ def test_no_type_words_changes_nothing():
     assert all(c["opportunity_score"] == 60 for c in ranked)
 
 
-def test_google_cards_are_untouched():
-    cards = [dict(geo("Boris Barber Shop", shop="barber"), source="google_text", platform=None)]
-    app.apply_geoapify_query_match(cards, "nail salon", QUERY)
-    assert "query_match" not in cards[0] and cards[0]["opportunity_score"] == 60
+def test_google_cards_use_google_types():
+    # 2026-11-04: Google cards now get the same match, from Google's own types
+    barber = {"business_name": "Boris Barber Shop", "source": "google_text", "platform": None,
+              "google_types": ["hair_care", "point_of_interest"], "opportunity_score": 60,
+              "score_reasons": []}
+    app.apply_geoapify_query_match([barber], "nail salon", QUERY)
+    assert barber["query_match"]["level"] == "other_type"
+    assert barber["opportunity_score"] == 48
 
 
 def test_search_geoapify_keeps_type_evidence(monkeypatch):
