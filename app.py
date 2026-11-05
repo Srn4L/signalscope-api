@@ -212,6 +212,13 @@ except Exception as _intent_import_err:
     print(f"[WARN] intent_service unavailable: {_intent_import_err}", flush=True)
     _INTENT_AVAILABLE = False
 
+# --- MEANING MATCH (embeddings; ranking only) --------------------------------
+try:
+    import embedding_service
+except Exception as _embed_import_err:
+    print(f"[WARN] embedding_service unavailable: {_embed_import_err}", flush=True)
+    embedding_service = None
+
 # --- DEV REPLAY (testing only, off unless YELHAO_DEV_REPLAY=1) --------------
 try:
     import replay_service
@@ -497,6 +504,8 @@ API_CALL_LIMITS = {
     # credit with room for the /health/providers check.
     "exa":            _env_int("LIMIT_API_EXA", 75),
     "firecrawl_search": _env_int("LIMIT_API_FIRECRAWL_SEARCH", 20),
+    # OpenAI embeddings for the Scout meaning match; one call per new search text
+    "openai_embed":   _env_int("LIMIT_API_OPENAI_EMBED", 500),
 }
 
 
@@ -5973,6 +5982,32 @@ QUERY_TYPE_TERMS = {
     "yoga":     ("yoga",),
     "pilates":  ("pilates",),
     "dental":   ("dentist", "dental", "orthodontist", "orthodontics"),
+    # Cuisines and food (2026-11-04, with the meaning match)
+    "west_african":   ("west african", "ghanaian", "nigerian", "senegalese", "ivorian", "liberian",
+                       "guinean", "malian", "gambian", "jollof", "suya", "waakye", "fufu", "egusi",
+                       "banku", "kenkey"),
+    "african":        ("african", "afro"),
+    "caribbean":      ("caribbean", "jamaican", "haitian", "trinidadian", "trini", "guyanese",
+                       "jerk", "roti", "oxtail"),
+    "ethiopian":      ("ethiopian", "eritrean", "injera"),
+    "latin":          ("latin", "dominican", "puerto rican", "cuban", "colombian", "salvadoran",
+                       "pupusa", "pupuseria", "empanada", "empanadas", "mofongo"),
+    "mexican":        ("mexican", "taqueria", "taco", "tacos", "burrito", "birria"),
+    "chinese":        ("chinese", "dim sum", "dumpling", "dumplings", "sichuan", "szechuan", "cantonese"),
+    "japanese":       ("japanese", "sushi", "ramen", "izakaya"),
+    "korean":         ("korean", "kbbq", "bibimbap"),
+    "thai":           ("thai",),
+    "indian":         ("indian", "biryani", "dosa", "tandoori", "curry", "pakistani", "bangladeshi"),
+    "halal":          ("halal",),
+    "middle_eastern": ("middle eastern", "mediterranean", "lebanese", "turkish", "falafel",
+                       "shawarma", "kebab", "yemeni", "persian"),
+    "italian":        ("italian", "trattoria", "pasta"),
+    "soul_food":      ("soul food", "southern"),
+    "vegan":          ("vegan", "vegetarian", "plant-based"),
+    "seafood":        ("seafood", "oyster", "oysters", "crab", "lobster"),
+    "bbq":            ("bbq", "barbecue", "smokehouse"),
+    "burger":         ("burger", "burgers"),
+    "dessert":        ("dessert", "desserts", "gelato", "donut", "donuts", "cupcake", "cupcakes", "ice cream"),
 }
 # Words too broad to identify a type on their own.
 QUERY_GENERIC_TERMS = ("salon", "salons", "beauty", "studio", "shop", "parlor", "parlour", "lounge", "bar")
@@ -5994,6 +6029,25 @@ _TYPE_TAG_VALUES = {
     "pizza":   {"cuisine": ("pizza",)},
     "gym":     {"leisure": ("fitness_centre",), "category": ("fitness",)},
     "dental":  {"amenity": ("dentist",), "healthcare": ("dentist",), "category": ("dentist",)},
+    "west_african":   {"cuisine": ("west_african", "ghanaian", "nigerian", "senegalese")},
+    "african":        {"cuisine": ("african", "west_african", "ethiopian", "eritrean")},
+    "caribbean":      {"cuisine": ("caribbean", "jamaican", "haitian", "trinidadian")},
+    "ethiopian":      {"cuisine": ("ethiopian", "eritrean")},
+    "latin":          {"cuisine": ("latin_american", "dominican", "cuban", "puerto_rican", "colombian")},
+    "mexican":        {"cuisine": ("mexican", "tex-mex")},
+    "chinese":        {"cuisine": ("chinese",)},
+    "japanese":       {"cuisine": ("japanese", "sushi", "ramen")},
+    "korean":         {"cuisine": ("korean",)},
+    "thai":           {"cuisine": ("thai",)},
+    "indian":         {"cuisine": ("indian", "pakistani", "bangladeshi")},
+    "halal":          {"diet:halal": ("yes", "only")},
+    "middle_eastern": {"cuisine": ("middle_eastern", "lebanese", "turkish", "mediterranean", "kebab")},
+    "italian":        {"cuisine": ("italian",)},
+    "vegan":          {"diet:vegan": ("yes", "only")},
+    "seafood":        {"cuisine": ("seafood", "fish")},
+    "bbq":            {"cuisine": ("bbq", "barbecue")},
+    "burger":         {"cuisine": ("burger",)},
+    "dessert":        {"cuisine": ("ice_cream", "dessert", "donut"), "amenity": ("ice_cream",)},
 }
 
 
@@ -6090,7 +6144,9 @@ def geoapify_query_match(candidate, terms):
         return {"level": "tag", "terms": tag_hits,
                 "reason": f"Listed as {', '.join(tag_hits)} ({'; '.join(evidence[t] for t in tag_hits)}), "
                           "matching your search"}
-    name_hits = sorted(t for t in terms if name_words & set(QUERY_TYPE_TERMS[t]))
+    name_joined = " " + " ".join(_words(candidate.get("business_name"))) + " "
+    name_hits = sorted(t for t in terms if t in QUERY_TYPE_TERMS and any(
+        (v in name_words) if " " not in v else (f" {v} " in name_joined) for v in QUERY_TYPE_TERMS[t]))
     if name_hits:
         return {"level": "name", "terms": name_hits,
                 "reason": f"Name mentions {', '.join(name_hits)} (inferred from the name)"}
@@ -6113,26 +6169,44 @@ GEOAPIFY_MATCH_ADJUST = {"tag": 12, "name": 10, "unknown": 0, "other_type": -12}
 _MATCH_TIER = {"tag": 0, "name": 0, "unknown": 1, "other_type": 2}
 
 
+def match_tier(card):
+    """Tiebreak rank from query_match; a match Google was searched with counts as unknown."""
+    m = card.get("query_match") or {}
+    if m.get("searched"):
+        return 1
+    return _MATCH_TIER.get(m.get("level"), 1)
+
+
 _QUERY_MATCH_SOURCES = ("geoapify",) + _GOOGLE_SCOUT_SOURCES
 
 
-def apply_geoapify_query_match(scored, niche, raw_query):
+def apply_geoapify_query_match(scored, niche, raw_query, extra_terms=None):
     """Annotate Geoapify and Google cards with query_match and adjust their score.
-    Google cards use the place types from the search response."""
-    terms = query_type_terms(niche, raw_query)
+    Google cards use the place types from the search response.
+    extra_terms: types found by the meaning match (embeddings).
+    For Google cards, a match on a type Google was already searched with
+    (the niche) only repeats Google's own pick, so it adds no points and no
+    card line; it still counts for ranking a different type down."""
+    terms = query_type_terms(niche, raw_query) | {t for t in (extra_terms or ()) if t in QUERY_TYPE_TERMS}
     if not terms:
         return
+    searched = query_type_terms(niche, "")
     for b in scored:
         if (b.get("source") or b.get("platform")) not in _QUERY_MATCH_SOURCES:
             continue
         m = geoapify_query_match(b, terms)
         b["query_match"] = m
-        adj = GEOAPIFY_MATCH_ADJUST.get(m["level"], 0)
+        is_google = (b.get("source") or b.get("platform")) != "geoapify"
+        already = (is_google and m["level"] in ("tag", "name") and bool(m["terms"])
+                   and set(m["terms"]) <= searched)
+        if already:
+            m["searched"] = True     # Google's own pick: no points, no tiebreak edge
+        adj = 0 if already else GEOAPIFY_MATCH_ADJUST.get(m["level"], 0)
         if adj:
             b["opportunity_score"] = max(0, min(100, (b.get("opportunity_score") or 0) + adj))
         # Google already matched the search words; an unconfirmed type on a
         # Google card is not worth a card line (Geoapify cards keep it).
-        quiet = m["level"] == "unknown" and (b.get("source") or b.get("platform")) != "geoapify"
+        quiet = (m["level"] == "unknown" and is_google) or already
         if m["reason"] and not quiet:
             impact = {"tag": "positive", "name": "positive", "other_type": "negative"}.get(m["level"], "neutral")
             b["score_reasons"] = [{"signal": m["reason"], "impact": impact, "weight": "high",
@@ -6968,9 +7042,22 @@ def prospect():
         biz.update(score_data)
         scored.append(biz)
 
+    # Meaning match: what types the user's words are about (embeddings,
+    # ranking only; never changes the Google query or any card fact)
+    query_meaning = None
+    if embedding_service is not None:
+        try:
+            query_meaning = embedding_service.match_query(raw_query or niche, budget_ok=api_budget_ok)
+            if query_meaning.get("terms"):
+                print(f"  -> Meaning match: {query_meaning['terms']} {query_meaning.get('top')}", flush=True)
+        except Exception as _em_err:
+            log_error("meaning match", _em_err)
+            query_meaning = None
+
     # The user's own words decide which places fit (Geoapify and Google cards)
     try:
-        apply_geoapify_query_match(scored, niche, raw_query)
+        apply_geoapify_query_match(scored, niche, raw_query,
+                                   extra_terms=(query_meaning or {}).get("terms"))
     except Exception as _qm_err:
         log_error("query match", _qm_err)
 
@@ -6986,7 +7073,7 @@ def prospect():
     # review_count, then alphabetical name (neutral deterministic fallback).
     scored.sort(key=lambda x: (
         -x["opportunity_score"],
-        _MATCH_TIER.get((x.get("query_match") or {}).get("level"), 1),
+        match_tier(x),
         -(x.get("rating") or 0),
         -(x.get("review_count") or 0),
         (x.get("business_name") or "").lower(),
@@ -7196,6 +7283,8 @@ def prospect():
         "input_intelligence":  input_intelligence or None,
         "niche_intelligence":  niche_intelligence or None,
         "ranking_strategy":    ranking_strategy,
+        # Which business types the search was matched to by meaning (debug/tuning)
+        "query_meaning":       query_meaning,
         "result_mix":          lane_counts,
         "world_cup_context":   None,  # World Cup removed; field kept for frontend compatibility
         "refresh": {
