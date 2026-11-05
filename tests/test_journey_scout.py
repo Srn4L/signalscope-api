@@ -161,3 +161,27 @@ def test_tables_not_marked_ready_when_creation_rolls_back(monkeypatch, mod_name,
     assert getattr(mod, flag) is False                 # will try again
     getattr(mod, ensure)()                              # second attempt commits
     assert getattr(mod, flag) is True
+
+
+# ── retries (option A): each request is its own run with its own cards ─────
+
+def test_retried_click_runs_again_and_gets_its_own_run(monkeypatch):
+    runs = []
+    google = FakeGoogle(_places())
+    _setup(monkeypatch, google)
+    monkeypatch.setattr(app, "_DB_AVAILABLE", True)
+    monkeypatch.setattr(app, "save_search", lambda d: 1)
+    monkeypatch.setattr(app, "upsert_business", lambda d: None)
+    monkeypatch.setattr(app, "log_discovery_event", lambda **k: None)
+    monkeypatch.setattr(app, "_scout_exposure_inputs", lambda *a, **k: ({}, None))
+    monkeypatch.setattr(js, "log_scout_run", lambda **kw: runs.append(kw) or len(runs))
+    body = {"niche": "nail salon", "location": "Astoria, NY", "client_run_id": "click-same-0001"}
+    c = app.app.test_client()
+    first = c.post("/prospect", json=body, headers={"X-Agent-Token": MASTER}).get_json()
+    google.places = _places(2)                  # the retry sees different results
+    second = c.post("/prospect", json=body, headers={"X-Agent-Token": MASTER}).get_json()
+    assert sum(1 for k, _ in google.calls if k == "text") == 2      # searched twice
+    assert (first["run_id"], second["run_id"]) == (1, 2)
+    assert [x["business_name"] for x in runs[1]["cards"]] == [x["business_name"] for x in second["results"]]
+    assert len(runs[0]["cards"]) == 4 and len(runs[1]["cards"]) == 2
+    assert runs[0]["client_run_id"] == runs[1]["client_run_id"] == "click-same-0001"

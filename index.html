@@ -2457,7 +2457,8 @@ const PROXY_URL = 'https://signalscope-api.onrender.com';
   else show();
 })();
 
-// One id per Scout run, so a retried request is recorded once.
+// One id per Scout click. A retry is still its own run; the id only groups
+// repeated attempts of the same click in analysis.
 function newScoutRunId() {
   try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch (e) {}
   return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);

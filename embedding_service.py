@@ -77,9 +77,20 @@ CATALOG = {
 }
 
 _LOCK = threading.Lock()
-_MEM = {}            # text_hash -> list[float]
+_MEM = {}            # text_hash -> (list[float], stored_at)
+# Each worker keeps vectors in memory only this long, so a deletion made
+# through another worker stops being served here within this time.
+MEM_TTL_SECONDS = int(os.environ.get("EMBED_MEM_TTL_SECONDS", "300") or 300)
+# After a deletion, the same text can't be stored again for this long, so a
+# request still in flight when it was deleted can't write it back.
+TOMBSTONE_MINUTES = 10
 _TABLE_READY = False
 STATS = {"live_calls": 0, "cache_hits": 0, "errors": 0}
+
+
+def cache_key(text: str) -> str:
+    """The exact, model-specific key a search text is cached under (full text)."""
+    return _hash(text)
 
 
 def _hash(text: str) -> str:
@@ -115,7 +126,8 @@ def _ensure_table():
                 catalog_version  TEXT,
                 seen_count       INTEGER DEFAULT 1,
                 created_at       TIMESTAMP DEFAULT NOW(),
-                last_seen_at     TIMESTAMP DEFAULT NOW()
+                last_seen_at     TIMESTAMP DEFAULT NOW(),
+                deleted_at       TIMESTAMP
             )
         """))
     _TABLE_READY = True
@@ -130,7 +142,8 @@ def _db_get(hashes):
         _ensure_table()
         with _db_session() as s:
             rows = s.execute(text(
-                "SELECT text_hash, embedding FROM query_embeddings WHERE text_hash = ANY(:h)"
+                "SELECT text_hash, embedding FROM query_embeddings "
+                "WHERE text_hash = ANY(:h) AND deleted_at IS NULL AND embedding IS NOT NULL"
             ), {"h": list(hashes)}).fetchall()
         out = {}
         for h, emb in rows:
@@ -155,8 +168,14 @@ def _db_put(rows):
                 s.execute(text("""
                     INSERT INTO query_embeddings (text_hash, kind, model, text, embedding)
                     VALUES (:h, :k, :m, :t, CAST(:e AS JSONB))
-                    ON CONFLICT (text_hash) DO NOTHING
-                """), {"h": h, "k": kind, "m": EMBED_MODEL, "t": txt[:1000], "e": json.dumps(vec)})
+                    ON CONFLICT (text_hash) DO UPDATE
+                        SET kind = EXCLUDED.kind, model = EXCLUDED.model, text = EXCLUDED.text,
+                            embedding = EXCLUDED.embedding, matches = NULL, seen_count = 1,
+                            created_at = NOW(), last_seen_at = NOW(), deleted_at = NULL
+                        WHERE query_embeddings.deleted_at IS NOT NULL
+                          AND query_embeddings.deleted_at < NOW() - make_interval(mins => :tomb)
+                """), {"h": h, "k": kind, "m": EMBED_MODEL, "t": txt[:1000], "e": json.dumps(vec),
+                   "tomb": TOMBSTONE_MINUTES})
     except Exception as e:
         _store_error("write", e)
 
@@ -171,30 +190,55 @@ def record_match(query_text: str, matches: dict):
                 UPDATE query_embeddings
                 SET matches = CAST(:mt AS JSONB), catalog_version = :v,
                     seen_count = COALESCE(seen_count, 0) + 1, last_seen_at = NOW()
-                WHERE text_hash = :h
+                WHERE text_hash = :h AND deleted_at IS NULL
             """), {"h": _hash(query_text), "mt": json.dumps(matches), "v": CATALOG_VERSION})
     except Exception as e:
         _store_error("write", e)
 
 
-def delete_texts(texts) -> int:
-    """Remove the cached embeddings of these search texts (memory and table)."""
-    hashes = [_hash(t) for t in texts or [] if t]
+def _recently_deleted(hashes) -> set:
+    """Keys deleted within TOMBSTONE_MINUTES (never cached again until then)."""
     if not hashes:
-        return 0
-    with _LOCK:
-        for h in hashes:
-            _MEM.pop(h, None)
+        return set()
     try:
         from sqlalchemy import text
         _ensure_table()
         with _db_session() as s:
-            r = s.execute(text("DELETE FROM query_embeddings WHERE text_hash = ANY(:h) AND kind = 'query'"),
-                          {"h": hashes})
-            return r.rowcount or 0
+            rows = s.execute(text(
+                "SELECT text_hash FROM query_embeddings WHERE text_hash = ANY(:h) "
+                "AND deleted_at IS NOT NULL AND deleted_at >= NOW() - make_interval(mins => :m)"
+            ), {"h": list(hashes), "m": TOMBSTONE_MINUTES}).fetchall()
+        return {r[0] for r in rows}
     except Exception as e:
-        _store_error("delete", e)
+        _store_error("read", e)
+        return set()
+
+
+def tombstone_keys(session, keys) -> int:
+    """
+    Inside the caller's transaction: erase the vectors, text and matches of
+    these search keys and mark them deleted, so no worker reads them from the
+    table and an in-flight request can't store them again for a while.
+    Catalog entries are never touched. Returns rows affected.
+    """
+    keys = sorted({k for k in keys or [] if k})
+    if not keys:
         return 0
+    from sqlalchemy import text
+    r = session.execute(text("""
+        UPDATE query_embeddings
+        SET embedding = NULL, text = NULL, matches = NULL, deleted_at = NOW()
+        WHERE text_hash = ANY(:h) AND kind = 'query'
+    """), {"h": keys})
+    forget_local(keys)
+    return r.rowcount or 0
+
+
+def forget_local(keys):
+    """Drop this worker's in-memory copies of these keys."""
+    with _LOCK:
+        for k in keys or []:
+            _MEM.pop(k, None)
 
 
 def _store_error(what, e):
@@ -260,15 +304,20 @@ def embed_many(items, budget_ok=None):
     if not want:
         return {}
     found = {}
+    now = time.time()
     with _LOCK:
         for h in want:
-            if h in _MEM:
-                found[h] = _MEM[h]
+            hit = _MEM.get(h)
+            if hit and now - hit[1] < MEM_TTL_SECONDS:
+                found[h] = hit[0]
+            elif hit:
+                _MEM.pop(h, None)
     rest = [h for h in want if h not in found]
     if rest:
         from_db = _db_get(rest)
         with _LOCK:
-            _MEM.update(from_db)
+            for h, v in from_db.items():
+                _MEM[h] = (v, now)
         found.update(from_db)
     STATS["cache_hits"] += len(found)
     rs = _replay()
@@ -286,11 +335,14 @@ def embed_many(items, budget_ok=None):
             if vecs:
                 if run is not None:
                     run.add_live("api.openai.com")
+                blocked = _recently_deleted(rest)
                 rows = []
                 with _LOCK:
                     for h, v in zip(rest, vecs):
-                        _MEM[h] = v
-                        found[h] = v
+                        found[h] = v                      # usable for this request
+                        if h in blocked:
+                            continue                      # deleted moments ago: don't keep it
+                        _MEM[h] = (v, time.time())
                         rows.append((h, want[h][0], want[h][1], v))
                 _db_put(rows)
     return {want[h][1]: v for h, v in found.items()}

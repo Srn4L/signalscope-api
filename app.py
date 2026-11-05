@@ -6735,6 +6735,7 @@ def prospect():
     }
     '''
     body = request.get_json(force=True, silent=True) or {}
+    _scout_started = time.time()
     is_demo = bool(body.get('demo'))
 
     if is_demo and not request.headers.get('X-Agent-Token'):
@@ -7233,7 +7234,7 @@ def prospect():
                 replay_mode=_replay_mode,
                 mode=mode, niche=niche, location=location, user_query=raw_query or niche,
                 meaning=query_meaning, ranking=ranking_strategy, is_refresh=is_refresh,
-                cards=top_results, business_ids=shown_biz_ids,
+                cards=top_results, business_ids=shown_biz_ids, started_at=_scout_started,
             )
         except Exception as _journey_err:
             log_error("journey record", _journey_err)
