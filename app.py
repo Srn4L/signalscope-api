@@ -5651,6 +5651,21 @@ def fetch_google_place_details(place_id, timeout=5):
         return None
 
 
+def google_price_label(level):
+    """Google price_level (0-4) as a label; "" when Google gives none (not checked)."""
+    if level is None or level == "":
+        return ""
+    try:
+        level = int(level)
+    except (TypeError, ValueError):
+        return ""
+    if level == 0:
+        return "Free"
+    if 1 <= level <= 4:
+        return "$" * level
+    return ""
+
+
 def search_google_places(niche, location, limit=10, fetch_details=True):
     '''
     Google Places Text Search.
@@ -5693,6 +5708,7 @@ def search_google_places(niche, location, limit=10, fetch_details=True):
                 if _det:
                     website = _det["website"]
                     phone   = _det["phone"]
+            _loc = (p.get("geometry") or {}).get("location") or {}
             row = {
                 "business_name":   name,
                 "website":         website or "",  # No website = empty, not Google search
@@ -5705,6 +5721,12 @@ def search_google_places(niche, location, limit=10, fetch_details=True):
                 "google_place_id": place_id,
                 "business_status": p.get("business_status", "") or "",
                 "phone":           phone,
+                # Free fields already in the search response
+                "price_level":     google_price_label(p.get("price_level")),
+                "google_types":    list(p.get("types") or []),
+                "open_now":        (p.get("opening_hours") or {}).get("open_now"),
+                "lat":             _loc.get("lat"),
+                "lng":             _loc.get("lng"),
             }
             if not fetch_details:
                 # Nothing beyond the search response was looked up yet.
@@ -5938,6 +5960,23 @@ _TYPE_TAG_VALUES = {
 }
 
 
+# Google Places types per query type. Google has no nail, lash or brow type:
+# those places are listed as beauty_salon, which is too broad to confirm or rule out.
+_GOOGLE_TYPE_VALUES = {
+    "hair":    ("hair_care",),
+    "barber":  ("hair_care",),
+    "spa":     ("spa",),
+    "cafe":    ("cafe",),
+    "bakery":  ("bakery",),
+    "gym":     ("gym",),
+    "dental":  ("dentist",),
+}
+# Broad Google types and the query types they may contain.
+_GOOGLE_BROAD_TYPES = {
+    "beauty_salon": ("nail", "lash", "brow", "wax", "makeup", "hair", "spa", "tanning", "massage"),
+}
+
+
 def _words(text):
     return re.findall(r"[a-z]+(?:-[a-z]+)?", (text or "").lower())
 
@@ -5974,7 +6013,21 @@ def _place_type_evidence(c):
                 hit = next((v for v in tag_vals if v in values), None)
                 if hit:
                     found[t] = f"OpenStreetMap {field}={hit}"
+    gtypes = [str(x) for x in (c.get("google_types") or [])]
+    for t, values in _GOOGLE_TYPE_VALUES.items():
+        hit = next((x for x in gtypes if x in values), None)
+        if hit and t not in found:
+            found[t] = f"Google type {hit}"
     return found
+
+
+def _broad_google_type_covering(c, terms):
+    """A broad Google type on the place that may include the searched types, else ""."""
+    for gtype in (c.get("google_types") or []):
+        covered = _GOOGLE_BROAD_TYPES.get(str(gtype))
+        if covered and terms & set(covered):
+            return str(gtype)
+    return ""
 
 
 def _place_types(c):
@@ -6005,6 +6058,11 @@ def geoapify_query_match(candidate, terms):
         return {"level": "name", "terms": name_hits,
                 "reason": f"Name mentions {', '.join(name_hits)} (inferred from the name)"}
     other = sorted(place_types - terms)
+    broad = _broad_google_type_covering(candidate, terms)
+    if other and broad:
+        # e.g. a nail salon Google lists as beauty_salon + hair_care: not ruled out
+        return {"level": "unknown", "terms": [],
+                "reason": f"Type not confirmed: Google lists it as {broad.replace('_', ' ')} (broad)"}
     if other:
         return {"level": "other_type", "terms": other,
                 "reason": f"Listed as {', '.join(other)} ({'; '.join(evidence[t] for t in other)}), "
@@ -6018,23 +6076,105 @@ GEOAPIFY_MATCH_ADJUST = {"tag": 12, "name": 10, "unknown": 0, "other_type": -12}
 _MATCH_TIER = {"tag": 0, "name": 0, "unknown": 1, "other_type": 2}
 
 
+_QUERY_MATCH_SOURCES = ("geoapify",) + _GOOGLE_SCOUT_SOURCES
+
+
 def apply_geoapify_query_match(scored, niche, raw_query):
-    """Annotate Geoapify cards with query_match and adjust their score."""
+    """Annotate Geoapify and Google cards with query_match and adjust their score.
+    Google cards use the place types from the search response."""
     terms = query_type_terms(niche, raw_query)
     if not terms:
         return
     for b in scored:
-        if (b.get("source") or b.get("platform")) != "geoapify":
+        if (b.get("source") or b.get("platform")) not in _QUERY_MATCH_SOURCES:
             continue
         m = geoapify_query_match(b, terms)
         b["query_match"] = m
         adj = GEOAPIFY_MATCH_ADJUST.get(m["level"], 0)
         if adj:
             b["opportunity_score"] = max(0, min(100, (b.get("opportunity_score") or 0) + adj))
-        if m["reason"]:
+        # Google already matched the search words; an unconfirmed type on a
+        # Google card is not worth a card line (Geoapify cards keep it).
+        quiet = m["level"] == "unknown" and (b.get("source") or b.get("platform")) != "geoapify"
+        if m["reason"] and not quiet:
             impact = {"tag": "positive", "name": "positive", "other_type": "negative"}.get(m["level"], "neutral")
             b["score_reasons"] = [{"signal": m["reason"], "impact": impact, "weight": "high",
                                    "key": "query_match"}] + list(b.get("score_reasons") or [])
+
+
+# Area check for Google text-search results (no API call). Text Search can
+# return places outside the searched neighborhood; nothing compared them.
+AREA_FAR_ADJUST = -10
+_AREA_CHECK_SOURCES = ("google_text", "adjacent_category")
+_AREA_MIN_POINTS = 5
+_AREA_FAR_KM = 2.0
+
+
+def _km_between(lat1, lng1, lat2, lng2):
+    import math
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = math.radians(lat2 - lat1), math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def _area_word(location):
+    """The searched place name, e.g. "Astoria" from "Astoria, Queens, NY"."""
+    first = (location or "").split(",")[0].strip()
+    return first if len(first) >= 3 else ""
+
+
+def apply_area_check(scored, location):
+    """
+    Label Google text-search cards by whether they sit in the searched area.
+    "address": the area name is in the address (no score change).
+    "far": much farther from the other results than they are from each other,
+    so possibly outside the area (score lowered, never removed).
+    Otherwise no label: no evidence either way is not a negative.
+    """
+    import statistics
+    cards = [b for b in scored if (b.get("source") or "") in _AREA_CHECK_SOURCES]
+    if not cards:
+        return
+    word = _area_word(location)
+    pts = [(b["lat"], b["lng"]) for b in cards
+           if isinstance(b.get("lat"), (int, float)) and isinstance(b.get("lng"), (int, float))]
+    center = None
+    typical = None
+    if len(pts) >= _AREA_MIN_POINTS:
+        center = (statistics.median(p[0] for p in pts), statistics.median(p[1] for p in pts))
+        typical = statistics.median(_km_between(center[0], center[1], a, b) for a, b in pts)
+    for b in cards:
+        if word and word.lower() in (b.get("address") or "").lower():
+            b["area_check"] = {"level": "address", "reason": f"Address is in {word}"}
+            continue
+        if center is None or not isinstance(b.get("lat"), (int, float)) or not isinstance(b.get("lng"), (int, float)):
+            continue
+        d = _km_between(center[0], center[1], b["lat"], b["lng"])
+        if d > max(_AREA_FAR_KM, 3 * (typical or 0)):
+            where = f"outside {word}" if word else "outside the searched area"
+            reason = f"About {d:.1f} km from the other results, possibly {where}"
+            b["area_check"] = {"level": "far", "km": round(d, 1), "reason": reason}
+            b["opportunity_score"] = max(0, (b.get("opportunity_score") or 0) + AREA_FAR_ADJUST)
+            b["score_reasons"] = [{"signal": reason, "impact": "negative", "weight": "medium",
+                                   "key": "area_check"}] + list(b.get("score_reasons") or [])
+
+
+def scout_dedup_key(biz):
+    """
+    Duplicate key for Scout candidates: Google place ID when present, else the
+    full normalized name plus the street part of the address. Two branches of
+    one business, or two names sharing a long prefix, stay separate.
+    """
+    pid = (biz.get("google_place_id") or "").strip()
+    if pid:
+        return "pid:" + pid
+    name = re.sub(r"[^a-z0-9]", "", (biz.get("business_name") or "").lower())
+    if len(name) < 2:
+        return ""
+    street = re.sub(r"[^a-z0-9]", "", (biz.get("address") or "").split(",")[0].lower())
+    return f"name:{name}|{street}"
 
 
 # --- LOCATION-AWARE COMPETITOR INTELLIGENCE -----------------------------------
@@ -6163,12 +6303,11 @@ def nearby_competitors_google(lat, lng, niche, radius_m=1500, limit=8, fetch_det
                   f"status={_nb.get('status') or 'none'}, message={_nb.get('error_message', '')[:200]}", flush=True)
         results = _nb.get('results', [])
         cards = []
-        price_map = {0: 'unknown', 1: '$', 2: '20', 3: '20$', 4: '2020'}
         for p in results[:limit]:
             name   = p.get('name', '').strip()
             rating = p.get('rating', 0)
             reviews= p.get('user_ratings_total', 0)
-            price  = price_map.get(p.get('price_level', 0), 'unknown')
+            price  = google_price_label(p.get('price_level')) or 'unknown'
             open_now = p.get('opening_hours', {}).get('open_now')
             vicinity = p.get('vicinity', '')
             place_id = p.get('place_id', '')
@@ -6195,6 +6334,9 @@ def nearby_competitors_google(lat, lng, niche, radius_m=1500, limit=8, fetch_det
                 'url':             website or '',  # No fallback to Google search
                 'place_id':        place_id,
                 'business_status': p.get('business_status', '') or '',
+                'types':           list(p.get('types') or []),
+                'lat':             ((p.get('geometry') or {}).get('location') or {}).get('lat'),
+                'lng':             ((p.get('geometry') or {}).get('location') or {}).get('lng'),
                 'phone':           phone,
             })
         print(f'  -> Nearby competitors: {len(cards)} within {radius_m}m')
@@ -6607,6 +6749,11 @@ def prospect():
                     "google_place_id": c.get("place_id", ""),
                     "business_status": c.get("business_status", ""),
                     "phone":           "",
+                    "price_level":     "" if c.get("price_level") == "unknown" else (c.get("price_level") or ""),
+                    "google_types":    c.get("types") or [],
+                    "open_now":        c.get("open_now"),
+                    "lat":             c.get("lat"),
+                    "lng":             c.get("lng"),
                     "website_checked": False,
                     "social_checked":  False,
                     "booking_checked": False,
@@ -6663,8 +6810,8 @@ def prospect():
     seen_keys = set()
     deduped   = []
     for biz in raw:
-        name_key = re.sub(r'[^a-z0-9]', '', (biz.get("business_name") or "").lower())[:20]
-        if not name_key or len(name_key) < 2:
+        name_key = scout_dedup_key(biz)
+        if not name_key:
             continue
         if name_key in seen_keys:
             continue
@@ -6739,7 +6886,7 @@ def prospect():
             seen_keys2 = set()
             deduped2   = []
             for b in deduped:
-                k = re.sub(r'[^a-z0-9]', '', (b.get("business_name") or "").lower())[:20]
+                k = scout_dedup_key(b)
                 if k and k not in seen_keys2:
                     seen_keys2.add(k)
                     deduped2.append(b)
@@ -6784,11 +6931,17 @@ def prospect():
         biz.update(score_data)
         scored.append(biz)
 
-    # Geoapify fallback: the user's own words decide which places fit
+    # The user's own words decide which places fit (Geoapify and Google cards)
     try:
         apply_geoapify_query_match(scored, niche, raw_query)
     except Exception as _qm_err:
-        log_error("geoapify query match", _qm_err)
+        log_error("query match", _qm_err)
+
+    # Is each Google text-search result in the searched area? (no API call)
+    try:
+        apply_area_check(scored, location)
+    except Exception as _ac_err:
+        log_error("area check", _ac_err)
 
     # Sort by opportunity_score first, then by quality tiebreakers so
     # identical scores produce a meaningful ranking instead of clustering.
@@ -6869,7 +7022,7 @@ def prospect():
             token_hash = hash_token(token_raw) if token_raw else None
 
             search_id = save_search({
-                "user_query":           niche,
+                "user_query":           (raw_query or niche)[:500],
                 "mode":                 mode,
                 "offer":                None,
                 "target_business_type": niche,
@@ -6961,8 +7114,13 @@ def prospect():
             # Social and booking are never looked up for Google cards in Scout.
             "social_checked":      b.get("social_checked", True),
             "booking_checked":     b.get("booking_checked", True),
-            # Geoapify only: how the place fits the searched type, and why
+            # How the place fits the searched type, and why (Geoapify and Google)
             "query_match":         b.get("query_match"),
+            # Free Google search-response fields; "" / None = Google gave none
+            "price_level":         b.get("price_level") or "",
+            "open_now":            b.get("open_now"),
+            # Whether the result sits in the searched area, and the evidence
+            "area_check":          b.get("area_check"),
         }
         if b.get("refresh_metadata"):
             card["refresh_metadata"] = b["refresh_metadata"]
