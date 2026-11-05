@@ -319,6 +319,36 @@ def _scout_exposure_inputs(scored, token_hash, niche, location):
     return frozen.get("stats") or {}, frozen.get("now")
 
 
+def annotate_seen_before(scored, exposure_stats):
+    """
+    Label businesses this access code was already shown or saved, without
+    moving them. Scout research keeps a stable order (2026-11-04): the same
+    search gives the same results; rotation happens only on Refresh.
+    Uses the same "name|location" key as get_candidate_exposure_stats.
+    """
+    exposure_stats = exposure_stats or {}
+    for c in scored:
+        name = re.sub(r"[^a-z0-9]", "", (c.get("business_name") or c.get("name") or "").lower())[:20]
+        loc = (c.get("location") or "").lower().strip()
+        st = exposure_stats.get(f"{name}|{loc}") or {}
+        seen = int(st.get("seen_count_for_token") or 0)
+        saved = bool(st.get("already_saved_by_token"))
+        contacted = bool(st.get("already_contacted_by_token"))
+        c["exposure"] = {
+            "seen_count_for_token":       seen,
+            "seen_count_global":          int(st.get("seen_count_global") or 0),
+            "already_saved_by_token":     saved,
+            "already_contacted_by_token": contacted,
+        }
+        if seen or saved or contacted:
+            last = st.get("last_seen_at_for_token")
+            c["seen_before"] = {
+                "count": seen,
+                "last_seen_at": last.isoformat() if hasattr(last, "isoformat") else last,
+                "saved": saved,
+            }
+
+
 # Routes that always call providers live; they can never honor saved-only replay.
 # (Plain /health is a liveness ping that calls no provider, so it is not listed.)
 _ALWAYS_LIVE_PREFIXES = ("/health/providers", "/dev/search/compare")
@@ -6977,12 +7007,22 @@ def prospect():
                 "service_angle":  input_intelligence.get("service_angle"),
                 "niche_key":      niche_intelligence.get("niche_key") if niche_intelligence else None,
             }
-            scored = apply_saturation_rerank(scored, expo_stats, _rerank_ctx, now=_rerank_now)
-            ranking_strategy = {
-                "type":                    "saturation_aware",
-                "message":                 "Results are reranked to reduce repeated leads and surface lower-saturation opportunities.",
-                "repeat_suppression_active": True,
-            }
+            if is_refresh:
+                # Refresh asks for new names: rotation away from what was shown
+                scored = apply_saturation_rerank(scored, expo_stats, _rerank_ctx, now=_rerank_now)
+                ranking_strategy = {
+                    "type":                    "saturation_aware",
+                    "message":                 "Results are reranked to reduce repeated leads and surface lower-saturation opportunities.",
+                    "repeat_suppression_active": True,
+                }
+            else:
+                # Research keeps a stable order; seen businesses are labeled, not pushed down
+                annotate_seen_before(scored, expo_stats)
+                ranking_strategy = {
+                    "type":                    "stable",
+                    "message":                 "Same search, same order. Businesses you've already seen are labeled, not pushed down. Use Refresh for new names.",
+                    "repeat_suppression_active": False,
+                }
         except Exception as _rerank_err:
             log_error("saturation reranking", _rerank_err)
 
@@ -7128,6 +7168,8 @@ def prospect():
             "open_now":            b.get("open_now"),
             # Whether the result sits in the searched area, and the evidence
             "area_check":          b.get("area_check"),
+            # This access code was shown or saved this business before (label only)
+            "seen_before":         b.get("seen_before"),
         }
         if b.get("refresh_metadata"):
             card["refresh_metadata"] = b["refresh_metadata"]
