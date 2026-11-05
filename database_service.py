@@ -108,90 +108,52 @@ def save_search(search_data: dict) -> int | None:
 # ---------------------------------------------------------------------------
 
 def upsert_business(business_data: dict) -> int | None:
-    gp_id = (business_data.get("google_place_id") or "").strip() or None
+    """
+    Every Scout run and Networks save comes through here. Stores only what
+    the source rules allow, under a permitted identifier (a Google place ID
+    today); records without one are not written and None is returned.
+    Excluded provider content is actively cleared on the existing row, so a
+    write can never preserve or restore it (legacy rows included).
+    """
+    try:
+        from source_rules import business_fields, permitted_identifier
+        fields = business_fields(business_data)
+    except Exception as _rules_err:
+        print(f"[DB] upsert_business: source rules unavailable ({_rules_err}); not saving", flush=True)
+        return None
+    gp_id = permitted_identifier(fields)
+    if not gp_id:
+        print("[DB] upsert_business: no permitted identifier; not stored", flush=True)
+        return None
 
     try:
         with get_db_session() as session:
-            if gp_id:
-                sql = text("""
-                    INSERT INTO businesses
-                        (name, category, location, address, phone, website,
-                         google_place_id, google_rating, google_review_count,
-                         instagram_url, facebook_url, source, raw_data, updated_at)
-                    VALUES
-                        (:name, :category, :location, :address, :phone, :website,
-                         :google_place_id, :google_rating, :google_review_count,
-                         :instagram_url, :facebook_url, :source, CAST(:raw_data AS JSONB), NOW())
-                    ON CONFLICT (google_place_id)
-                    DO UPDATE SET
-                        name                = EXCLUDED.name,
-                        category            = COALESCE(EXCLUDED.category,            businesses.category),
-                        location            = COALESCE(EXCLUDED.location,            businesses.location),
-                        address             = COALESCE(EXCLUDED.address,             businesses.address),
-                        phone               = COALESCE(EXCLUDED.phone,               businesses.phone),
-                        website             = COALESCE(EXCLUDED.website,             businesses.website),
-                        google_rating       = COALESCE(EXCLUDED.google_rating,       businesses.google_rating),
-                        google_review_count = COALESCE(EXCLUDED.google_review_count, businesses.google_review_count),
-                        instagram_url       = COALESCE(EXCLUDED.instagram_url,       businesses.instagram_url),
-                        facebook_url        = COALESCE(EXCLUDED.facebook_url,        businesses.facebook_url),
-                        source              = COALESCE(EXCLUDED.source,              businesses.source),
-                        raw_data            = COALESCE(EXCLUDED.raw_data,            businesses.raw_data),
-                        updated_at          = NOW()
-                    RETURNING id
-                """)
-                row = session.execute(sql, _build_params(business_data)).fetchone()
-                return row[0] if row else None
-
-            name     = (business_data.get("name") or "").strip()
-            location = (business_data.get("location") or "").strip()
-
-            if not name:
-                print("[DB] upsert_business: no name provided, skipping.", flush=True)
-                return None
-
-            check = text("""
-                SELECT id FROM businesses
-                WHERE LOWER(name) = LOWER(:name)
-                  AND LOWER(location) = LOWER(:location)
-                LIMIT 1
+            sql = text("""
+                INSERT INTO businesses
+                    (name, category, location, address, phone, website,
+                     google_place_id, google_rating, google_review_count,
+                     instagram_url, facebook_url, source, raw_data, updated_at)
+                VALUES
+                    (:name, :category, :location, :address, :phone, :website,
+                     :google_place_id, :google_rating, :google_review_count,
+                     :instagram_url, :facebook_url, :source, CAST(:raw_data AS JSONB), NOW())
+                ON CONFLICT (google_place_id)
+                DO UPDATE SET
+                    name                = EXCLUDED.name,
+                    category            = COALESCE(EXCLUDED.category, businesses.category),
+                    location            = COALESCE(EXCLUDED.location, businesses.location),
+                    address             = EXCLUDED.address,
+                    phone               = EXCLUDED.phone,
+                    website             = EXCLUDED.website,
+                    google_rating       = EXCLUDED.google_rating,
+                    google_review_count = EXCLUDED.google_review_count,
+                    source              = COALESCE(EXCLUDED.source, businesses.source),
+                    raw_data            = EXCLUDED.raw_data,
+                    updated_at          = NOW()
+                RETURNING id
             """)
-            existing = session.execute(check, {"name": name, "location": location}).fetchone()
-
-            if existing:
-                upd = text("""
-                    UPDATE businesses SET
-                        category            = COALESCE(:category,            category),
-                        address             = COALESCE(:address,             address),
-                        phone               = COALESCE(:phone,               phone),
-                        website             = COALESCE(:website,             website),
-                        google_rating       = COALESCE(:google_rating,       google_rating),
-                        google_review_count = COALESCE(:google_review_count, google_review_count),
-                        instagram_url       = COALESCE(:instagram_url,       instagram_url),
-                        facebook_url        = COALESCE(:facebook_url,        facebook_url),
-                        source              = COALESCE(:source,              source),
-                        raw_data            = COALESCE(CAST(:raw_data AS JSONB), raw_data),
-                        updated_at          = NOW()
-                    WHERE id = :id
-                """)
-                params = _build_params(business_data)
-                params["id"] = existing[0]
-                session.execute(upd, params)
-                return existing[0]
-            else:
-                ins = text("""
-                    INSERT INTO businesses
-                        (name, category, location, address, phone, website,
-                         google_place_id, google_rating, google_review_count,
-                         instagram_url, facebook_url, source, raw_data)
-                    VALUES
-                        (:name, :category, :location, :address, :phone, :website,
-                         :google_place_id, :google_rating, :google_review_count,
-                         :instagram_url, :facebook_url, :source, CAST(:raw_data AS JSONB))
-                    RETURNING id
-                """)
-                row = session.execute(ins, _build_params(business_data)).fetchone()
-                return row[0] if row else None
-
+            row = session.execute(sql, _build_params(fields)).fetchone()
+            return row[0] if row else None
     except Exception as exc:
         print(f"[DB] upsert_business error: {exc}", flush=True)
         return None
@@ -771,6 +733,19 @@ def save_scout_result_to_network(result_data: dict, token_hash: str) -> dict:
     source = result_data.get("source") or result_data.get("platform") or ""
 
     score_reasons = result_data.get("score_reasons") or []
+    # Source rules: text and scores built from provider data are not kept
+    # for sources that may not keep content (all sources today)
+    try:
+        from source_rules import rule_for, reason_keys
+        _keep_text = bool(rule_for(source)["content"])
+    except Exception:
+        reason_keys, _keep_text = None, False
+    if not _keep_text:
+        score_reasons = reason_keys(score_reasons) if reason_keys else []
+        result_data = {k: v for k, v in result_data.items()
+                       if k not in ("why_it_fits", "problem_detected", "signals", "opportunity_fit_score",
+                                    "opportunity_score", "score_confidence", "key_weakness",
+                                    "primary_problem")}
     if score_reasons and isinstance(score_reasons[0], dict):
         why_it_fits = "; ".join(r.get("signal", "") for r in score_reasons if r.get("signal"))
         problem     = score_reasons[0].get("signal") if score_reasons else None
@@ -800,7 +775,8 @@ def save_scout_result_to_network(result_data: dict, token_hash: str) -> dict:
             },
         })
         if not biz_id:
-            return {"ok": False, "error": "Failed to save business"}
+            return {"ok": False, "error": "not saved: no permitted identifier for this business "
+                                          "(source rules), or the database is unavailable"}
 
         # ── Pull intelligence fields from payload (or leave None) ──────────
         service_angle      = result_data.get("service_angle")      or None
@@ -873,7 +849,7 @@ def save_scout_result_to_network(result_data: dict, token_hash: str) -> dict:
             "platform":         result_data.get("platform") or source,
             "mode":             mode,
         }
-        opp_id = save_opportunity({
+        _opp_payload = {
             "business_id":            biz_id,
             "search_id":              result_data.get("search_id") or None,
             "opportunity_type":       mode,
@@ -897,7 +873,15 @@ def save_scout_result_to_network(result_data: dict, token_hash: str) -> dict:
             "contact_target":         contact_target,
             "contact_confidence":     contact_confidence,
             "contact_reason":         contact_reason,
-        })
+        }
+        # Source rules on the FINAL payload, after inference (contact fields
+        # inferred from the card's phone or website are built from provider data)
+        try:
+            from source_rules import opportunity_fields
+            _opp_payload = opportunity_fields(_opp_payload, source)
+        except Exception:
+            return {"ok": False, "error": "source rules unavailable"}
+        opp_id = save_opportunity(_opp_payload)
         if not opp_id:
             return {"ok": False, "error": "Failed to save opportunity"}
 
@@ -906,12 +890,14 @@ def save_scout_result_to_network(result_data: dict, token_hash: str) -> dict:
 
         # 5. Refresh saturation for this combination
         try:
+            # Filtered values only: the unfiltered contact fields were built
+            # from provider data and must not reach any other table
             refresh_opportunity_saturation(
                 business_id=biz_id,
-                opportunity_type=mode,
-                service_angle=service_angle,
-                contact_target=contact_target,
-                contact_method=best_contact_path,
+                opportunity_type=_opp_payload.get("opportunity_type") or mode,
+                service_angle=_opp_payload.get("service_angle"),
+                contact_target=_opp_payload.get("contact_target"),
+                contact_method=_opp_payload.get("best_contact_path"),
             )
         except Exception as _sat_err:
             print(f"[DB] saturation refresh skipped: {_sat_err}", flush=True)
@@ -1207,27 +1193,39 @@ def get_candidate_exposure_stats(
         if (c.get("business_name") or c.get("name") or "").strip()
     ))
 
-    if not name_list:
+    pid_list = sorted({(c.get("google_place_id") or "").strip() for c in candidates
+                       if (c.get("google_place_id") or "").strip()})
+
+    if not name_list and not pid_list:
         return {}
 
     result = {}
 
     try:
         with get_db_session() as session:
-            placeholders = ", ".join([f":n{i}" for i in range(len(name_list))])
+            # Place IDs first: rows saved under the source rules keep no name
+            pid_lookup = {}
+            if pid_list:
+                for row in session.execute(
+                    text("SELECT id, google_place_id FROM businesses WHERE google_place_id = ANY(:p)"),
+                    {"p": pid_list},
+                ).fetchall():
+                    pid_lookup[row[1]] = {"id": row[0]}
+
+            placeholders = ", ".join([f":n{i}" for i in range(len(name_list))]) or "NULL"
             params       = {f"n{i}": n for i, n in enumerate(name_list)}
 
             biz_rows = session.execute(
-                text(f"SELECT id, name, location FROM businesses WHERE name IN ({placeholders})"),
+                text(f"SELECT id, name, location FROM businesses WHERE name <> '' AND name IN ({placeholders})"),
                 params,
-            ).fetchall()
+            ).fetchall() if name_list else []
 
             biz_lookup = {}
             for row in biz_rows:
                 nk = _re.sub(r"[^a-z0-9]", "", (row[1] or "").lower())[:20]
                 biz_lookup[nk] = {"id": row[0], "location": row[2]}
 
-            if not biz_lookup:
+            if not biz_lookup and not pid_lookup:
                 recent_rows = session.execute(
                     text("""
                         SELECT id, name, location FROM businesses
@@ -1240,10 +1238,10 @@ def get_candidate_exposure_stats(
                     if nk and nk not in biz_lookup:
                         biz_lookup[nk] = {"id": row[0], "location": row[2]}
 
-            if not biz_lookup:
+            if not biz_lookup and not pid_lookup:
                 return {_norm_key(c): dict(empty_stats) for c in candidates}
 
-            biz_ids = [v["id"] for v in biz_lookup.values()]
+            biz_ids = sorted({v["id"] for v in list(biz_lookup.values()) + list(pid_lookup.values())})
             id_pl   = ", ".join([f":bid{i}" for i in range(len(biz_ids))])
             id_prm  = {f"bid{i}": bid for i, bid in enumerate(biz_ids)}
 
@@ -1301,7 +1299,7 @@ def get_candidate_exposure_stats(
             for c in candidates:
                 key = _norm_key(c)
                 nk  = _re.sub(r"[^a-z0-9]", "", (c.get("business_name") or c.get("name") or "").lower())[:20]
-                biz = biz_lookup.get(nk)
+                biz = pid_lookup.get((c.get("google_place_id") or "").strip()) or biz_lookup.get(nk)
 
                 if not biz:
                     result[key] = dict(empty_stats)

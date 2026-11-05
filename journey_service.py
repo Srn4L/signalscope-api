@@ -43,17 +43,7 @@ STATS = {"runs": 0, "skipped_deleted": 0, "errors": 0}
 # not stored. Geoapify (OpenStreetMap data) is not approved yet: its terms
 # and attribution need checking first. Booking sources come from web search
 # results and are not approved. Unlisted sources store nothing.
-SOURCE_RULES = {
-    "google_text":       {"ids": ("google_place_id",), "content": ()},
-    "google_nearby":     {"ids": ("google_place_id",), "content": ()},
-    "google_places":     {"ids": ("google_place_id",), "content": ()},
-    "adjacent_category": {"ids": ("google_place_id",), "content": ()},
-    "geoapify":          {"ids": (), "content": ()},
-    "booking_platform":  {"ids": (), "content": ()},
-}
-_NO_RULE = {"ids": (), "content": ()}
-# Content fields a rule may ever allow (none are allowed today)
-_CONTENT_FIELDS = ("business_name", "address")
+from source_rules import SOURCE_RULES, NO_RULE as _NO_RULE, CONTENT_FIELDS as _CONTENT_FIELDS  # noqa: E402
 
 _CLIENT_RUN_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
