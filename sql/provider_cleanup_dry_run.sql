@@ -35,13 +35,9 @@ SELECT
       CASE WHEN b.raw_data ? 'score_reasons' THEN 'raw_data.score_reasons' END,
       CASE WHEN b.raw_data ? 'score_confidence' THEN 'raw_data.score_confidence' END)
   END AS fields_to_clear,
-  CASE WHEN b.google_touched AND b.google_place_id IS NULL AND COALESCE(b.name,'') <> '' THEN
-    'ik1:' || left(encode(sha256(convert_to(
-      btrim(regexp_replace(lower(b.name), '[^a-z0-9]+', ' ', 'g')) || '|' ||
-      btrim(regexp_replace(lower(COALESCE(b.location,'')), '[^a-z0-9]+', ' ', 'g')), 'UTF8')), 'hex'), 32)
-  END AS identity_key_to_add,
+  (SELECT COUNT(*) FROM opportunities o WHERE o.business_id = b.id AND b.google_touched) AS opportunities_to_clear,
   CASE WHEN b.google_place_id IS NOT NULL THEN 'place_id'
-       WHEN b.google_touched THEN 'identity_key'
+       WHEN b.google_touched THEN 'yelhao id only (no automatic matching until a permitted identifier exists)'
        ELSE 'name+location (unchanged)' END AS identity_after,
   (SELECT COUNT(*) FROM discovery_events d WHERE d.business_id = b.id) AS discovery_events_kept,
   (SELECT COUNT(*) FROM opportunities o WHERE o.business_id = b.id) AS opportunities_kept,

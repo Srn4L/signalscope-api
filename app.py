@@ -212,6 +212,15 @@ except Exception as _intent_import_err:
     print(f"[WARN] intent_service unavailable: {_intent_import_err}", flush=True)
     _INTENT_AVAILABLE = False
 
+# --- PROVIDER-CONTENT EXPORTS (paused by default) ---------------------------
+# CRM pushes (HubSpot, Salesforce, Airtable, connectors, batch push), the n8n
+# notification and Analyze saves to Networks copy provider content (Google
+# names, phones, websites, ratings, text built from them) into durable or
+# outside records. Paused until those paths follow the source rules.
+PROVIDER_EXPORTS_ENABLED = os.environ.get("PROVIDER_EXPORTS_ENABLED", "0").strip().lower() in ("1", "true", "yes")
+_EXPORTS_PAUSED = ("Paused: CRM exports and Analyze saves are off until they follow "
+                   "Yelhao's provider-content rules.")
+
 # --- MEANING MATCH (embeddings; ranking only) --------------------------------
 try:
     import embedding_service
@@ -2955,6 +2964,9 @@ def run_deep_job(job_id, business_name, location, website_pages, social_text,
         if replay_service is not None and replay_service.current_mode() != "off":
             print(f"  [CRM] skipped: owner replay run ({replay_service.current_mode()})", flush=True)
             return
+        if not PROVIDER_EXPORTS_ENABLED:
+            print("  [CRM] skipped: provider-content exports paused", flush=True)
+            return
 
         # -- Push to HubSpot (silent fail - never block the report) ------------
         hubspot_contact_id = None
@@ -3023,6 +3035,8 @@ def _save_analysis_to_network(report, objective_mode, network_context):
         return {"ok": False, "skipped": "database unavailable"}
     if replay_service is not None and replay_service.is_saved_run():
         return {"ok": False, "skipped": "saved-data replay (test rerun)"}
+    if not PROVIDER_EXPORTS_ENABLED:
+        return {"ok": False, "skipped": _EXPORTS_PAUSED}
     v2 = report.get("opportunity_score_v2") or {}
     score = v2.get("final_score") if isinstance(v2, dict) else None
     weaknesses = [w for w in (report.get("weaknesses") or []) if isinstance(w, str)]
@@ -8206,6 +8220,8 @@ def sync_connector(name):
     """POST /connectors/<name>/sync — push a single analyzed record to a CRM."""
     if get_code_type(request) is None:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    if not PROVIDER_EXPORTS_ENABLED:
+        return jsonify({"ok": False, "error": _EXPORTS_PAUSED}), 403
     body    = request.get_json(force=True, silent=True) or {}
     api_key = body.get("api_key","")
     data    = body.get("data") or body
@@ -8293,6 +8309,8 @@ def batch_push_crm(batch_id):
     """POST /batch/<id>/push_crm — push batch results to a CRM."""
     if get_code_type(request) is None:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    if not PROVIDER_EXPORTS_ENABLED:
+        return jsonify({"ok": False, "error": _EXPORTS_PAUSED}), 403
     job = BATCH_JOBS.get(batch_id)
     if not job or job["status"] != "done":
         return jsonify({"ok": False, "error": "Batch not done or not found"}), 404

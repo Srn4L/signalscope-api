@@ -13,15 +13,9 @@ WHERE b.source IN ('google_text','google_nearby','google_places','adjacent_categ
    OR COALESCE(b.google_rating, 0) > 0 OR COALESCE(b.google_review_count, 0) > 0
    OR b.google_place_id IS NOT NULL;
 
--- 1. Identity for rows without a place id, computed before the name is removed
---    (must equal source_rules.identity_key)
-UPDATE businesses b
-SET raw_data = COALESCE(b.raw_data, '{}'::jsonb) || jsonb_build_object('identity_key',
-      'ik1:' || left(encode(sha256(convert_to(
-        btrim(regexp_replace(lower(b.name), '[^a-z0-9]+', ' ', 'g')) || '|' ||
-        btrim(regexp_replace(lower(COALESCE(b.location,'')), '[^a-z0-9]+', ' ', 'g')), 'UTF8')), 'hex'), 32))
-WHERE b.id IN (SELECT id FROM _touched)
-  AND b.google_place_id IS NULL AND COALESCE(b.name, '') <> '';
+-- Rows without a place id keep their Yelhao id and every relationship; no
+-- identity key is derived from the provider name (not established as
+-- permitted). Automatic matching for them waits for a permitted identifier.
 
 -- 2. Google-derived business fields
 UPDATE businesses b
@@ -31,12 +25,15 @@ SET name = '', address = NULL, phone = NULL, website = NULL,
     updated_at = NOW()
 WHERE b.id IN (SELECT id FROM _touched);
 
--- 3. Networks opportunities on those businesses: text and scores built from
---    provider data (reason text, problem, fit score, contact reasoning)
+-- 3. Networks opportunities on those businesses: every field outside the
+--    allowlist (business_id, search_id, opportunity_type, service_angle,
+--    user_role; source_rules.OPPORTUNITY_ALLOWED) is built from provider data
 UPDATE opportunities o
-SET problem_detected = NULL, why_it_fits = NULL, opportunity_fit_score = NULL,
-    signals = NULL, best_contact_path = NULL, contact_reason = NULL,
-    suggested_message = NULL, updated_at = NOW()
+SET matched_offer = NULL, problem_detected = NULL, why_it_fits = NULL, why_now = NULL,
+    opportunity_fit_score = NULL, saturation_score = NULL, contactability_score = NULL,
+    source_diversity_score = NULL, signals = NULL, risk_flags = NULL, recommended_offer = NULL,
+    best_contact_path = NULL, suggested_message = NULL, suggested_follow_up = NULL,
+    contact_target = NULL, contact_confidence = NULL, contact_reason = NULL, updated_at = NOW()
 WHERE o.business_id IN (SELECT id FROM _touched);
 
 COMMIT;

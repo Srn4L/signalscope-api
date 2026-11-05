@@ -25,6 +25,8 @@ def deep(monkeypatch):
 
     monkeypatch.setattr(app, "save_scout_result_to_network", fake_save)
     monkeypatch.setattr(app, "_DB_AVAILABLE", True)
+    # These tests cover behavior with exports turned on (paused by default)
+    monkeypatch.setattr(app, "PROVIDER_EXPORTS_ENABLED", True)
     monkeypatch.setattr(app, "run_full_pipeline", lambda *a, **k: {
         "overall_score": 64, "key_insight": "Strong reviews, no booking link.",
         "weaknesses": ["No online booking", "Thin Instagram"]})
@@ -191,3 +193,22 @@ def test_hubspot_search_falls_back_to_company_name(monkeypatch):
     sent.clear()
     assert app.hs_find_contact(email="a@b.co", domain="unioncafe.example", company="Union Cafe") == "c-9"
     assert [p for p, _ in sent] == ["email", "website", "company"]
+
+
+# ── exports and Analyze saves are paused by default (source rules) ─────────
+
+def test_paused_by_default_no_crm_writes_and_no_networks_save(deep, monkeypatch):
+    monkeypatch.setattr(app, "PROVIDER_EXPORTS_ENABLED", False)
+    job = _run()
+    assert job["status"] == "done"                      # the report still finishes
+    assert deep["crm"] == [] and deep["saves"] == []
+
+
+def test_paused_crm_routes_refuse(monkeypatch):
+    monkeypatch.setattr(app, "PROVIDER_EXPORTS_ENABLED", False)
+    monkeypatch.setattr(app, "MASTER_CODE", "m")
+    c = app.app.test_client()
+    r = c.post("/connectors/hubspot/sync", json={"data": {"business_name": "X"}}, headers={"X-Agent-Token": "m"})
+    assert r.status_code == 403 and "Paused" in r.get_json()["error"]
+    r = c.post("/batch/abc/push_crm", json={}, headers={"X-Agent-Token": "m"})
+    assert r.status_code == 403

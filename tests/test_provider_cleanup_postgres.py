@@ -117,82 +117,127 @@ def test_dry_run_lists_fields_provenance_and_kept_links(pg):
     assert g["google_touched"] and "place_id set" in g["evidence"] and g["identity_after"] == "place_id"
     assert g["fields_to_clear"] == ("name, address, phone, website, google_rating, google_review_count, "
                                     "raw_data.score_reasons, raw_data.score_confidence")
-    assert n["identity_after"] == "identity_key" and n["discovery_events_kept"] == 1 and n["opportunities_kept"] == 1
-    import source_rules
-    assert n["identity_key_to_add"] == source_rules.identity_key("Mama G. African Kitchen", "Bronx, NY")
+    assert n["identity_after"].startswith("yelhao id only")
+    assert n["discovery_events_kept"] == 1 and n["opportunities_kept"] == 1 and n["opportunities_to_clear"] == 1
+    assert "identity_key_to_add" not in n
     assert not geo["google_touched"] and geo["fields_to_clear"] is None
     assert not bk["google_touched"] and bk["identity_after"] == "name+location (unchanged)"
+
+
+def _row(db, text, table, i):
+    with db.get_db_session() as s:
+        return dict(s.execute(text(f"SELECT * FROM {table} WHERE id = :i"), {"i": i}).mappings().one())
+
+
+def _assert_no_google(row):
+    assert row["name"] == "" and row["address"] is None and row["phone"] is None and row["website"] is None
+    assert row["google_rating"] is None and row["google_review_count"] is None
+    assert "score_reasons" not in (row["raw_data"] or {}) and "score_confidence" not in (row["raw_data"] or {})
 
 
 def test_apply_clears_google_fields_keeps_ids_links_and_independent_rows(pg):
     ds, db, text = pg
     ids = _legacy_rows(db, text)
     _run_sql(db, "provider_cleanup_apply.sql")
-    with db.get_db_session() as s:
-        g = dict(s.execute(text("SELECT * FROM businesses WHERE id = :i"), {"i": ids["g_pid"]}).mappings().one())
-        n = dict(s.execute(text("SELECT * FROM businesses WHERE id = :i"), {"i": ids["g_nopid"]}).mappings().one())
-        geo = dict(s.execute(text("SELECT * FROM businesses WHERE id = :i"), {"i": ids["geo"]}).mappings().one())
-        opp = dict(s.execute(text("SELECT * FROM opportunities WHERE id = :i"), {"i": ids["opp"]}).mappings().one())
-        de = s.execute(text("SELECT COUNT(*) FROM discovery_events")).scalar()
-        st = s.execute(text("SELECT COUNT(*) FROM opportunity_states WHERE opportunity_id = :o"), {"o": ids["opp"]}).scalar()
+    g, n, geo = (_row(db, text, "businesses", ids[k]) for k in ("g_pid", "g_nopid", "geo"))
     for row in (g, n):
-        assert row["name"] == "" and row["address"] is None and row["phone"] is None and row["website"] is None
-        assert row["google_rating"] is None and row["google_review_count"] is None
-        assert "score_reasons" not in row["raw_data"] and "score_confidence" not in row["raw_data"]
+        _assert_no_google(row)
         assert row["category"] and row["location"]
-    assert g["google_place_id"] == "pid-1"
-    import source_rules
-    assert n["raw_data"]["identity_key"] == source_rules.identity_key("Mama G. African Kitchen", "Bronx, NY")
+    assert g["google_place_id"] == "pid-1" and "identity_key" not in (n["raw_data"] or {})
     assert geo["name"] == "Camila Nails Salon" and geo["address"] == "30-01 36th Ave"     # independent: kept
-    assert opp["business_id"] == ids["g_nopid"] and opp["why_it_fits"] is None and opp["problem_detected"] is None
-    assert opp["opportunity_fit_score"] is None and opp["contact_reason"] is None
-    assert de == 2 and st == 1                                                            # relationships intact
+    opp = _row(db, text, "opportunities", ids["opp"])
+    assert opp["business_id"] == ids["g_nopid"]
+    for f in ("problem_detected", "why_it_fits", "opportunity_fit_score", "signals", "best_contact_path",
+              "contact_reason", "contact_target", "suggested_message", "suggested_follow_up"):
+        assert opp[f] is None, f
+    with db.get_db_session() as s:
+        assert s.execute(text("SELECT COUNT(*) FROM discovery_events")).scalar() == 2
+        assert s.execute(text("SELECT COUNT(*) FROM opportunity_states WHERE opportunity_id = :o"),
+                         {"o": ids["opp"]}).scalar() == 1
 
 
 def _scout_write(ds, **over):
-    data = {"name": "Mama G. African Kitchen", "category": "restaurant", "location": "Bronx, NY",
-            "address": "1322A E Gun Hill Rd", "phone": "(718) 555-0199", "website": "https://mamag.example",
-            "google_place_id": None, "google_rating": 4.2, "google_review_count": 466, "source": "google_text",
-            "raw_data": {"platform": "google_places", "score_reasons": [{"signal": "466 reviews"}],
+    data = {"name": "Chris Spa & Nails", "category": "nail salon", "location": "Astoria, NY",
+            "address": "21-34 Broadway", "phone": "(718) 555-0199", "website": "https://chris.example",
+            "google_place_id": "pid-1", "google_rating": 4.9, "google_review_count": 187, "source": "google_text",
+            "raw_data": {"platform": "google_places", "score_reasons": [{"signal": "187 reviews"}],
                          "score_confidence": "high", "website_checked": True}}
     data.update(over)
     return ds.upsert_business(data)
 
 
-def test_later_scout_and_networks_saves_cannot_repopulate(pg):
+def test_writes_clear_uncleared_legacy_rows(pg):
+    # No cleanup run: a Scout write to a legacy row removes its old Google content
+    ds, db, text = pg
+    ids = _legacy_rows(db, text)
+    assert _scout_write(ds) == ids["g_pid"]
+    _assert_no_google(_row(db, text, "businesses", ids["g_pid"]))
+    # ...even when the write itself carries no values for those fields
+    with db.get_db_session() as s:
+        s.execute(text("UPDATE businesses SET name = 'Old Name', address = 'Old St', phone = '1', website = 'w', "
+                       "google_rating = 4, google_review_count = 9 WHERE id = :i"), {"i": ids["g_pid"]})
+    assert ds.upsert_business({"google_place_id": "pid-1", "source": "google_text"}) == ids["g_pid"]
+    _assert_no_google(_row(db, text, "businesses", ids["g_pid"]))
+
+
+def test_records_without_a_permitted_identifier_are_not_written(pg):
+    ds, db, text = pg
+    ids = _legacy_rows(db, text)
+    with db.get_db_session() as s:
+        before = s.execute(text("SELECT COUNT(*) FROM businesses")).scalar()
+    assert _scout_write(ds, name="Mama G. African Kitchen", location="Bronx, NY", google_place_id=None) is None
+    assert ds.upsert_business({"name": "Camila Nails Salon", "location": "Astoria, NY", "source": "geoapify"}) is None
+    with db.get_db_session() as s:
+        assert s.execute(text("SELECT COUNT(*) FROM businesses")).scalar() == before
+    n = _row(db, text, "businesses", ids["g_nopid"])
+    assert n["name"] == "Mama G. African Kitchen"          # legacy row untouched until cleanup
+
+
+def test_networks_save_cannot_store_contact_info_or_generated_text(pg, monkeypatch):
+    ds, db, text = pg
+    _legacy_rows(db, text)
+    import contact_service
+    monkeypatch.setattr(contact_service, "infer_best_contact_path", lambda biz, ctx: {
+        "best_contact_path": f"Call {biz.get('phone')}", "contact_target": "owner",
+        "contact_confidence": "high", "contact_reason": f"Website {biz.get('website')} lists a phone"})
+    monkeypatch.setattr(contact_service, "infer_service_angle", lambda ctx, biz: "booking")
+    out = ds.save_scout_result_to_network({
+        "business_name": "Chris Spa & Nails", "location": "Astoria, NY", "category": "nail salon",
+        "address": "21-34 Broadway", "phone": "(718) 555-0199", "website": "https://chris.example",
+        "rating": 4.9, "review_count": 187, "source": "google_text", "platform": "google_places",
+        "google_place_id": "pid-1", "mode": "outreach", "opportunity_score": 61,
+        "why_it_fits": "4.9 stars from 187 reviews", "problem_detected": "187 reviews but no booking",
+        "contact_target": "owner", "contact_reason": "call (718) 555-0199",
+        "suggested_message": "Hi Chris Spa", "suggested_follow_up": "Call again",
+        "score_reasons": [{"key": "demand", "signal": "187 reviews", "impact": "positive", "weight": "high"}]},
+        "t2")
+    assert out["ok"]
+    opp = _row(db, text, "opportunities", out["opportunity_id"])
+    for f in ("problem_detected", "why_it_fits", "opportunity_fit_score", "signals", "best_contact_path",
+              "contact_target", "contact_confidence", "contact_reason", "suggested_message",
+              "suggested_follow_up", "recommended_offer"):
+        assert opp[f] is None, f
+    assert opp["opportunity_type"] == "outreach" and opp["service_angle"] == "booking"
+    _assert_no_google(_row(db, text, "businesses", out["business_id"]))
+
+
+def test_networks_save_without_place_id_is_refused_cleanly(pg):
+    ds, db, text = pg
+    out = ds.save_scout_result_to_network({"business_name": "Camila Nails Salon", "location": "Astoria, NY",
+                                           "source": "geoapify", "mode": "feature"}, "t3")
+    assert out["ok"] is False and "no permitted identifier" in out["error"]
+
+
+def test_reason_keys_keep_key_only():
+    import source_rules
+    assert source_rules.reason_keys([{"key": "demand", "signal": "4.9", "impact": "positive", "weight": "high"},
+                                     {"signal": "no key"}]) == [{"key": "demand"}]
+
+
+def test_seen_before_still_works_after_names_are_cleared(pg):
     ds, db, text = pg
     ids = _legacy_rows(db, text)
     _run_sql(db, "provider_cleanup_apply.sql")
-    # Scout write without a place id finds the same row by identity key
-    assert _scout_write(ds) == ids["g_nopid"]
-    # Scout write with a place id updates the place-id row
-    assert _scout_write(ds, name="Chris Spa & Nails", location="Astoria, NY", google_place_id="pid-1") == ids["g_pid"]
-    # Networks save of a full Google card
-    out = ds.save_scout_result_to_network({
-        "business_name": "Mama G. African Kitchen", "location": "Bronx, NY", "category": "restaurant",
-        "address": "1322A E Gun Hill Rd", "phone": "(718) 555-0199", "website": "https://mamag.example",
-        "rating": 4.2, "review_count": 466, "source": "google_text", "platform": "google_places",
-        "mode": "outreach", "opportunity_score": 61, "why_it_fits": "4.2 stars from 466 reviews",
-        "score_reasons": [{"key": "demand", "signal": "466 reviews", "impact": "positive"}]}, "t2")
-    assert out["ok"] and out["business_id"] == ids["g_nopid"]
-    with db.get_db_session() as s:
-        for bid in (ids["g_nopid"], ids["g_pid"]):
-            row = dict(s.execute(text("SELECT * FROM businesses WHERE id = :i"), {"i": bid}).mappings().one())
-            assert row["name"] == "" and row["address"] is None and row["phone"] is None and row["website"] is None
-            assert row["google_rating"] is None and row["google_review_count"] is None
-            assert "score_reasons" not in (row["raw_data"] or {})
-        new_opp = dict(s.execute(text("SELECT * FROM opportunities WHERE id = :o"),
-                                 {"o": out["opportunity_id"]}).mappings().one())
-    assert new_opp["why_it_fits"] in (None, "") and new_opp["opportunity_fit_score"] is None
-    assert "466" not in str(new_opp["signals"]) and "466" not in str(new_opp["problem_detected"])
-
-
-def test_new_google_business_is_stored_without_content(pg):
-    ds, db, text = pg
-    bid = _scout_write(ds, name="Brand New Spot", google_place_id="pid-new")
-    nid = _scout_write(ds, name="No Pid Spot", location="Harlem, NY")
-    with db.get_db_session() as s:
-        for i in (bid, nid):
-            row = dict(s.execute(text("SELECT * FROM businesses WHERE id = :i"), {"i": i}).mappings().one())
-            assert row["name"] == "" and row["address"] is None and row["google_rating"] is None
-    assert _scout_write(ds, name="No Pid Spot", location="Harlem, NY") == nid       # same business again
+    stats = ds.get_candidate_exposure_stats(
+        [{"business_name": "Chris Spa & Nails", "location": "Astoria, NY", "google_place_id": "pid-1"}], "t")
+    assert list(stats.values())[0]["seen_count_for_token"] == 1      # matched by place id, not name
