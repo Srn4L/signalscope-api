@@ -518,8 +518,12 @@ def _budget_ok_replayable(provider: str, *key_parts) -> bool:
     if rs_mod is not None and rs_mod.was_skipped(provider, list(key_parts), 0):
         return False
     ok = api_budget_ok(provider)
-    if not ok and rs_mod is not None:
-        rs_mod.note_skip(provider, list(key_parts), 0)
+    if rs_mod is not None:
+        if not ok:
+            rs_mod.note_skip(provider, list(key_parts), 0)
+        elif hasattr(rs_mod, "clear_skip"):
+            # The step runs in this capture: drop any older skip note for it
+            rs_mod.clear_skip(provider, list(key_parts), 0)
     return ok
 
 
@@ -964,6 +968,9 @@ def _provider_skipped(provider, query, max_results, has_key, status_out):
         if replay_service is not None:
             replay_service.note_skip(provider, query, max_results)
         return True
+    if replay_service is not None and hasattr(replay_service, "clear_skip"):
+        # The step runs in this capture: drop any older skip note for it
+        replay_service.clear_skip(provider, query, max_results)
     return False
 
 

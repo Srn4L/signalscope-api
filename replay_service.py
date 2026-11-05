@@ -306,6 +306,23 @@ def put(key: str, payload: dict):
             print(f"[Replay] store write unavailable ({str(e)[:80]}); memory only", flush=True)
 
 
+def delete(key: str) -> bool:
+    """Remove one saved entry (memory and table). True if anything was removed."""
+    with _LOCK:
+        removed = _MEM.pop(key, None) is not None
+    try:
+        from sqlalchemy import text
+        with _db_session() as s:
+            _ensure_table(s)
+            r = s.execute(text("DELETE FROM dev_replay_cache WHERE cache_key = :k"), {"k": key})
+            removed = removed or bool(r.rowcount)
+    except Exception as e:
+        STATS["errors"] += 1
+        if STATS["errors"] in (1, 10, 100):
+            print(f"[Replay] store delete unavailable ({str(e)[:80]}); memory only", flush=True)
+    return removed
+
+
 def clear() -> int:
     with _LOCK:
         n = len(_MEM)
@@ -591,6 +608,17 @@ def note_skip(provider: str, query: str, max_results: int):
     """Capture: this search step was skipped (no key or daily cap)."""
     if _effective_mode() == "all":
         put(make_key("skip", provider, query, max_results), {"skipped": True})
+
+
+def clear_skip(provider: str, query: str, max_results: int) -> bool:
+    """
+    Capture: this step ran this time, so an older capture's skip note for it
+    is stale. Without this, a saved rerun skips the step again and replays
+    the old fallback instead of this capture (2026-11-04 Astoria rerun).
+    """
+    if _effective_mode() != "all":
+        return False
+    return delete(make_key("skip", provider, query, max_results))
 
 
 def was_skipped(provider: str, query: str, max_results: int) -> bool:
